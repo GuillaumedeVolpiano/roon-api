@@ -1,0 +1,26 @@
+-- |
+-- Module      : Roon.Error
+-- Description : What can go wrong when talking to a Roon Server
+-- License     : BSD-3-Clause
+module Roon.Error
+  ( RoonError (..)
+  ) where
+
+import Data.Text (Text)
+import Roon.Moo.Message (MooParseError)
+
+-- | Failures reported through the @Error RoonError@ effect.
+data RoonError
+  = -- | The WebSocket could not be opened. Carries the cause.
+    ConnectFailed Text
+  | -- | The connection closed, or the server stopped answering pings.
+    ConnectionLost
+  | -- | The server sent a frame that is not a MOO message.
+    ProtocolViolation MooParseError
+  | -- | A request was answered with an unexpected status. Carries the
+    -- request name, then the reply name.
+    UnexpectedReply Text Text
+  | -- | A reply had the expected status but not the expected body.
+    -- Carries the request name, then the decoding error.
+    UnexpectedReplyBody Text Text
+  deriving stock (Eq, Show)
