@@ -4,8 +4,11 @@
 -- License     : BSD-3-Clause
 module Roon.Connection
   ( withRoon
+  , withRoonWithin
   , runRoon
+  , runRoonWithin
   , registerExtension
+  , registerExtensionWithin
 
     -- * Reconnection
   , Reconnect (..)
@@ -22,7 +25,7 @@ import Roon.Effect.Moo (Moo, defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (TokenStore, loadToken, saveToken)
 import Roon.Effect.WebSocket (ServerAddress, WebSocket, runWebSocket)
 import Roon.Error (RoonError (..))
-import Roon.Registry (CoreInfo (..), ExtensionInfo (..), Registration (..), info, register)
+import Roon.Registry (CoreInfo (..), ExtensionInfo (..), Registration (..), info, register, registerWithin)
 
 -- | Register the extension, reusing the stored token if there is one, and
 -- store the token that the server returns.
@@ -33,10 +36,21 @@ registerExtension
   :: (Moo :> es, TokenStore :> es, Error RoonError :> es)
   => ExtensionInfo
   -> Eff es Registration
-registerExtension extension = do
+registerExtension = registerExtensionWithin Nothing
+
+-- | 'registerExtension', waiting at most a number of microseconds for the
+-- server to answer the registration, and so for the user to enable the
+-- extension; 'Nothing' waits as long as needed. Throws 'TimedOut' when the
+-- time is up.
+registerExtensionWithin
+  :: (Moo :> es, TokenStore :> es, Error RoonError :> es)
+  => Maybe Int
+  -> ExtensionInfo
+  -> Eff es Registration
+registerExtensionWithin limit extension = do
   core <- info
   token <- loadToken core.coreId
-  registration <- register extension token
+  registration <- maybe register registerWithin limit extension token
   saveToken registration.core.coreId registration.token
   pure registration
 
@@ -50,8 +64,17 @@ runRoon
   => ExtensionInfo
   -> (Registration -> Eff (Moo : es) a)
   -> Eff es a
-runRoon extension action =
-  runMoo defaultRequestHandler (registerExtension withPing >>= action)
+runRoon = runRoonWithin Nothing
+
+-- | 'runRoon', with a limit on the registration ('registerExtensionWithin').
+runRoonWithin
+  :: (WebSocket :> es, Concurrent :> es, TokenStore :> es, Error RoonError :> es)
+  => Maybe Int
+  -> ExtensionInfo
+  -> (Registration -> Eff (Moo : es) a)
+  -> Eff es a
+runRoonWithin limit extension action =
+  runMoo defaultRequestHandler (registerExtensionWithin limit withPing >>= action)
   where
     withPing
       | pingService `elem` extension.providedServices = extension
@@ -65,7 +88,19 @@ withRoon
   -> ExtensionInfo
   -> (Registration -> Eff (Moo : WebSocket : es) a)
   -> Eff es a
-withRoon address extension = runWebSocket address . runRoon extension
+withRoon = withRoonWithin Nothing
+
+-- | 'withRoon', with a limit on the registration
+-- ('registerExtensionWithin'): for a program that cannot wait for the user
+-- to enable the extension.
+withRoonWithin
+  :: (IOE :> es, Concurrent :> es, TokenStore :> es, Error RoonError :> es)
+  => Maybe Int
+  -> ServerAddress
+  -> ExtensionInfo
+  -> (Registration -> Eff (Moo : WebSocket : es) a)
+  -> Eff es a
+withRoonWithin limit address extension = runWebSocket address . runRoonWithin limit extension
 
 -- | When to try again after the connection is lost or refused.
 data Reconnect = Reconnect

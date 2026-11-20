@@ -11,7 +11,7 @@ import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Effectful (Eff, IOE, liftIO, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Roon.Connection (Reconnect (..), reconnecting, runRoon)
+import Roon.Connection (Reconnect (..), reconnecting, runRoon, runRoonWithin)
 import Roon.Effect.Moo
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message
@@ -53,6 +53,11 @@ tests =
             field "token" registerRequest @?= Just (String "old")
             answer wire registerRequest Continue "Registered" (registered "new")
           fmap snd outcome @?= Right (Map.singleton "core-1" "new")
+      , testCase "gives up when the extension is not enabled in time" $ do
+          (outcome, ()) <- withServer Map.empty (runRoonWithin (Just 50_000) extension pure) $ \wire -> do
+            _ <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
+            pure ()
+          fmap fst outcome @?= Left (TimedOut "com.roonlabs.registry:1/register")
       , testCase "rejects a request for a service it does not provide" $ do
           (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
             infoRequest <- expectRequest wire "com.roonlabs.registry:1/info"
