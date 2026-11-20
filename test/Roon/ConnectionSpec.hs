@@ -4,8 +4,10 @@ module Roon.ConnectionSpec (tests) where
 
 import Data.Aeson (Value (..), object, (.=))
 import Data.Map.Strict qualified as Map
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically, writeTQueue)
 import Data.Text (Text)
+import Effectful (liftIO)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Roon.Connection (runRoon)
 import Roon.Effect.Moo
@@ -57,6 +59,26 @@ tests =
             (rejection.verb, rejection.name, rejection.requestId) @?= (Complete, "InvalidRequest", RequestId "7")
             answer wire infoRequest Complete "Success" coreBody
           fmap fst outcome @?= Right testCore
+      , testCase "routes replies while the server's request is being answered" $ do
+          (gate, answered) <- (,) <$> newEmptyMVar <*> newEmptyMVar
+          -- The answer to the server waits until the client has its reply.
+          let handler service method body = case (service, method) of
+                ("svc:1", "slow") -> liftIO (takeMVar gate) >> pure ("Success", NoBody)
+                _ -> defaultRequestHandler service method body
+              client = runMoo handler $ do
+                reply <- request "svc:1/question" NoBody
+                liftIO (putMVar gate ())
+                -- Stay connected until the server has the answer.
+                liftIO (takeMVar answered)
+                pure reply.name
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            question <- expectRequest wire "svc:1/question"
+            sendToClient wire (serverRequest "9" "svc:1/slow")
+            answer wire question Complete "Answer" NoBody
+            slow <- receiveFromClient wire
+            (slow.verb, slow.name, slow.requestId) @?= (Complete, "Success", RequestId "9")
+            putMVar answered ()
+          fmap fst outcome @?= Right "Answer"
       , testCase "routes replies to the exchange they answer" $ do
           let client = runMoo defaultRequestHandler $ do
                 first <- openExchange "svc:1/first" NoBody

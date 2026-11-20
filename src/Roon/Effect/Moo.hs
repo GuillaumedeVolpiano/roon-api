@@ -8,8 +8,9 @@
 -- replies, then at most one @COMPLETE@. The server also sends requests of
 -- its own, such as pings, which the extension must answer.
 --
--- 'runMoo' reads the socket in a background thread, routes each reply to
--- the exchange that waits for it, and answers the server's requests.
+-- 'runMoo' reads the socket in a background thread and routes each reply
+-- to the exchange that waits for it; another thread answers the server's
+-- requests.
 module Roon.Effect.Moo
   ( -- * Effect
     Moo
@@ -34,7 +35,7 @@ module Roon.Effect.Moo
   , pingService
   ) where
 
-import Control.Monad (void, (>=>))
+import Control.Monad (forever, void, (>=>))
 import Data.Bool (bool)
 import Data.Aeson (object, (.=))
 import Data.ByteString (ByteString)
@@ -53,6 +54,7 @@ import Effectful.Concurrent.STM
   , atomically
   , modifyTVar'
   , newTQueue
+  , newTQueueIO
   , newTVar
   , newTVarIO
   , orElse
@@ -183,10 +185,11 @@ withSubscription name body consume = do
 -- | Answers a request made by the server. Receives the service, the
 -- method and the body; returns the status and the body of the reply.
 --
--- The handler runs in the thread that reads the connection, not in the
--- thread of the action given to 'runMoo'. Changes it makes to thread-local
--- effects, such as a local @State@, are not seen by that action: share
--- data through a shared-state effect or a 'TVar'.
+-- The handler runs in a thread of its own, one request after the other,
+-- so that a slow answer does not hold up the replies to the extension.
+-- Changes it makes to thread-local effects, such as a local @State@, are
+-- not seen by the action given to 'runMoo': share data through a
+-- shared-state effect or a 'TVar'.
 type RequestHandler es = Text -> Text -> Body -> Eff es (Text, Body)
 
 -- | The service every extension must provide: the server calls it to
@@ -209,6 +212,8 @@ data MooState = MooState
   , closed :: TVar (Maybe RoonError)
   -- ^ Why no more reply will come, once the receive loop has stopped.
   , nextSubscriptionKey :: TVar Word64
+  , serverRequests :: TQueue MooMessage
+  -- ^ Requests of the server, waiting for the handler.
   }
 
 -- | Run MOO exchanges over a WebSocket. The handler answers the requests
@@ -219,9 +224,10 @@ runMoo
   -> Eff (Moo : es) a
   -> Eff es a
 runMoo handler action = do
-  state <- MooState <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTVarIO 0
-  withAsync (receiveLoop state handler) $ \_ ->
-    interpret_ (handleMoo state) action
+  state <- MooState <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTVarIO 0 <*> newTQueueIO
+  withAsync (receiveLoop state) $ \_ ->
+    withAsync (answerLoop state handler) $ \_ ->
+      interpret_ (handleMoo state) action
 
 handleMoo
   :: (WebSocket :> es, Concurrent :> es)
@@ -270,38 +276,39 @@ forget state exchange = do
 
 -- | Route incoming frames until the connection closes or the server
 -- breaks the protocol, then record why.
-receiveLoop
-  :: (WebSocket :> es, Concurrent :> es)
-  => MooState
-  -> RequestHandler es
-  -> Eff es ()
-receiveLoop state handler =
+receiveLoop :: (WebSocket :> es, Concurrent :> es) => MooState -> Eff es ()
+receiveLoop state =
   ( do
-      failure <- Stream.fold (Fold.catMaybes Fold.one) (Stream.mapM (dispatch state handler) frames)
-      close (fromMaybe ConnectionLost failure)
+      failure <- Stream.fold (Fold.catMaybes Fold.one) (Stream.mapM (dispatch state) frames)
+      closeConnection state (fromMaybe ConnectionLost failure)
   )
-    `finally` close ConnectionLost
+    `finally` closeConnection state ConnectionLost
+
+-- | Record why no more reply will come. Keeps the first reason.
+closeConnection :: Concurrent :> es => MooState -> RoonError -> Eff es ()
+closeConnection state reason = atomically (modifyTVar' state.closed (Just . fromMaybe reason))
+
+-- | Answer the requests of the server, in the order they came. If the
+-- handler fails, the connection counts as lost: the server would no
+-- longer get answers.
+answerLoop :: (WebSocket :> es, Concurrent :> es) => MooState -> RequestHandler es -> Eff es ()
+answerLoop state handler = forever answerNext `finally` closeConnection state ConnectionLost
   where
-    -- Keeps the first reason.
-    close reason = atomically (modifyTVar' state.closed (Just . fromMaybe reason))
+    answerNext = do
+      message <- atomically (readTQueue state.serverRequests)
+      (status, body) <- case splitServiceMethod message.name of
+        Just (service, method) -> handler service method message.body
+        Nothing -> pure ("InvalidRequest", JsonBody (object ["error" .= ("malformed request name: " <> message.name)]))
+      void . sendFrame $
+        encode MooMessage {verb = Complete, name = status, requestId = message.requestId, headers = Map.empty, body}
 
 -- | Handle one frame. Returns the reason to stop, if any.
-dispatch
-  :: (WebSocket :> es, Concurrent :> es)
-  => MooState
-  -> RequestHandler es
-  -> ByteString
-  -> Eff es (Maybe RoonError)
-dispatch state handler frame = case parse frame of
+dispatch :: Concurrent :> es => MooState -> ByteString -> Eff es (Maybe RoonError)
+dispatch state frame = case parse frame of
   Left err -> pure (Just (ProtocolViolation err))
   Right message ->
     Nothing <$ case message.verb of
-      Request -> do
-        (status, body) <- case splitServiceMethod message.name of
-          Just (service, method) -> handler service method message.body
-          Nothing -> pure ("InvalidRequest", JsonBody (object ["error" .= ("malformed request name: " <> message.name)]))
-        void . sendFrame $
-          encode MooMessage {verb = Complete, name = status, requestId = message.requestId, headers = Map.empty, body}
+      Request -> atomically (writeTQueue state.serverRequests message)
       Continue -> deliver message False
       Complete -> deliver message True
   where
