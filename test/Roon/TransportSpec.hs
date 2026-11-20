@@ -79,6 +79,18 @@ tests =
             answer wire unsubscription Complete "Success" NoBody
           let seeked = let Zone {..} = livingRoom in Zone {nowPlaying = atSeek 100 <$> nowPlaying, queueTimeRemaining = Just 2152, ..}
           fmap fst outcome @?= Right (Map.singleton livingRoom.zoneId seeked)
+      , testCase "gives a view of the zones after each event" $ do
+          views <- Stream.toList (zoneViews (Stream.fromList zoneScript))
+          map Map.keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId, kitchen], [livingRoom.zoneId, kitchen]]
+      , testCase "holds back views that only move the seek position" $ do
+          views <- Stream.toList (zoneViewsEvery 3600 (Stream.fromList zoneScript))
+          -- The subscription, then the new zone, which carries the
+          -- positions held back.
+          map Map.keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId, kitchen]]
+          fmap (.nowPlaying) (Map.lookup livingRoom.zoneId (last views)) @?= Just (atSeek 120 <$> livingRoom.nowPlaying)
+      , testCase "gives every view when the interval is zero" $ do
+          views <- Stream.toList (zoneViewsEvery 0 (Stream.fromList zoneScript))
+          length views @?= length zoneScript
       , testCase "ends the stream when the server ends the subscription" $ do
           let client = runMoo defaultRequestHandler (subscribeZones (Stream.fold Fold.length))
           (outcome, ()) <- withServer Map.empty client $ \wire -> do
@@ -119,8 +131,26 @@ tests =
           applyQueueEvent (QueueChanged [OtherQueueChange (object ["operation" .= ("move" :: Text)])]) [firstSong]
             @?= [firstSong]
       ]
+
+atSeek :: Int -> NowPlaying -> NowPlaying
+atSeek position (NowPlaying _ len image artists one two three) = NowPlaying (Just position) len image artists one two three
+
+kitchen :: ZoneId
+kitchen = ZoneId "zone-0002"
+
+-- | A subscription, two seek moves, a new zone, another seek move.
+zoneScript :: [ZoneEvent]
+zoneScript =
+  [ ZonesSubscribed [livingRoom]
+  , seekTo 110
+  , seekTo 120
+  , ZonesChanged noChanges {added = [kitchenZone]}
+  , seekTo 130
+  ]
   where
-    atSeek position (NowPlaying _ len image artists one two three) = NowPlaying (Just position) len image artists one two three
+    seekTo position = ZonesChanged noChanges {seekChanged = [SeekChange {zoneId = livingRoom.zoneId, seekPosition = Just position, queueTimeRemaining = Nothing}]}
+    noChanges = ZoneChanges {removed = [], added = [], changed = [], seekChanged = []}
+    kitchenZone = let Zone {..} = livingRoom in Zone {zoneId = kitchen, displayName = "Kitchen", outputs = [], nowPlaying = Nothing, ..}
 
 -- Fixtures
 

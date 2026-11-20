@@ -40,6 +40,8 @@ module Roon.Transport
   , subscribeZones
   , applyZoneEvent
   , zones
+  , zoneViews
+  , zoneViewsEvery
 
     -- * The queue
   , QueueItem (..)
@@ -92,7 +94,10 @@ import Roon.Moo.Message (Body (..))
 import Roon.Service (call, expect, subscribe, subscriptionUpdates)
 import Streamly.Data.Fold (Fold)
 import Streamly.Data.Fold qualified as Fold
+import GHC.Clock (getMonotonicTime)
+import Streamly.Data.Scanl qualified as Scanl
 import Streamly.Data.Stream (Stream)
+import Streamly.Data.Stream qualified as Stream
 
 transportService :: Text
 transportService = "com.roonlabs.transport:2"
@@ -397,10 +402,34 @@ applyZoneEvent = \case
       Zone {nowPlaying = atSeek change.seekPosition <$> nowPlaying, queueTimeRemaining = change.queueTimeRemaining, ..}
     atSeek position (NowPlaying _ len image artists one two three) = NowPlaying position len image artists one two three
 
--- | The zones as the events describe them, for 'Streamly.Data.Stream.scan'
--- or 'Streamly.Data.Stream.fold'.
+-- | The zones as the events describe them, at the end of the stream.
 zones :: Monad m => Fold m ZoneEvent (Map ZoneId Zone)
 zones = Fold.foldl' (flip applyZoneEvent) Map.empty
+
+-- | The zones after each event.
+zoneViews :: Monad m => Stream m ZoneEvent -> Stream m (Map ZoneId Zone)
+zoneViews = Stream.postscanl (Scanl.mkScanl (flip applyZoneEvent) Map.empty)
+
+-- | The zones after each event, except that events which only move the
+-- seek position give a view at most once per interval, in seconds. A
+-- zone that plays reports its position every second; other changes, such
+-- as a new track or a pause, always give a view at once, which includes
+-- the positions not reported until then.
+zoneViewsEvery :: MonadIO m => Double -> Stream m ZoneEvent -> Stream m (Map ZoneId Zone)
+zoneViewsEvery interval =
+  Stream.mapMaybe (\(_, _, view) -> view) . Stream.postscanl (Scanl.mkScanlM step (pure (Map.empty, Nothing, Nothing)))
+  where
+    step (current, lastShown, _) event = do
+      now <- liftIO getMonotonicTime
+      let updated = applyZoneEvent event current
+          due = maybe True (\shown -> now - shown >= interval) lastShown
+      pure $
+        if seekOnly event && not due
+          then (updated, lastShown, Nothing)
+          else (updated, Just now, Just updated)
+    seekOnly = \case
+      ZonesChanged ZoneChanges {removed = [], added = [], changed = []} -> True
+      _ -> False
 
 -- The queue
 
