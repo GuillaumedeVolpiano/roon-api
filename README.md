@@ -26,6 +26,12 @@ Early work in progress. Nothing here is stable yet.
     cabal build all
     cabal test
 
+roon-api depends on
+[effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets),
+not yet on Hackage. `cabal.project` picks it up, with
+[effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly),
+when they are checked out next to this repository.
+
 ## Trying it against a server
 
     cabal run roon-probe -- [HOST [PORT]]

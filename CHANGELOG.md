@@ -3,7 +3,8 @@
 ## 0.1.0.0 -- unreleased
 
 * MOO message format: types, encoder and parser (`Roon.Moo.Message`).
-* WebSocket transport with ping and pong (`Roon.Effect.WebSocket`).
+* WebSocket transport with ping and pong (`Roon.Effect.WebSocket`), over
+  `effectful-websockets`.
 * Requests and subscriptions multiplexed over one connection, and replies
   to the requests of the server (`Roon.Effect.Moo`).
 * Extension registration (`Roon.Registry`) with token persistence

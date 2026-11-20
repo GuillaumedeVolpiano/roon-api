@@ -1,0 +1,6 @@
+packages: .
+
+-- The libraries split out of roon-api, when they are checked out next to it.
+optional-packages:
+  ../effectful-streamly
+  ../effectful-websockets
