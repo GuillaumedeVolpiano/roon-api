@@ -372,7 +372,8 @@ trackActionTitle = \case
 
 -- | Open a candidate down to its list of actions, then select the action
 -- with the given title, for a zone. The session must not have moved since
--- the search. Throws 'BrowseFailed' when Roon reports an error, and
+-- the search. After an action, Roon goes back to the level of the track;
+-- the zone reports the change a moment later. Throws 'BrowseFailed' when Roon reports an error, and
 -- 'BrowseItemMissing' when no such action is offered.
 performTrackAction
   :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es)

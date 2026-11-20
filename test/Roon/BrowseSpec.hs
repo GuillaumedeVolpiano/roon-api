@@ -73,7 +73,9 @@ tests =
             answer wire actions Complete "Success" (JsonBody actionLevel)
             queue <- expectRequest wire "com.roonlabs.browse:1/browse"
             (field "item_key" queue, field "zone_or_output_id" queue) @?= (Just (String "4:2"), Just (String "zone-1"))
-            answer wire queue Complete "Success" (JsonBody (object ["action" .= ("none" :: Text)]))
+            -- What Roon Server 2.75 answered: it goes back to the level of
+            -- the track.
+            answer wire queue Complete "Success" (JsonBody queuedReply)
           fmap fst outcome @?= Right ()
       , testCase "reports an error message from Roon" $ do
           let client = runMoo defaultRequestHandler (performTrackAction livingRoom (trackActionTitle PlayNow) secondSong)
@@ -165,4 +167,11 @@ actionLevel = fromJust . decodeStrictText $
   {"items":[{"hint":"action","item_key":"4:0","subtitle":null,"title":"Play Now"},{"hint":"action","item_key":"4:1","subtitle":null,"title":"Add Next"},
   {"hint":"action","item_key":"4:2","subtitle":null,"title":"Queue"},{"hint":"action","item_key":"4:3","subtitle":null,"title":"Start Radio"}],
   "list":{"count":4,"display_offset":null,"hint":"action_list","level":3,"subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"},"offset":0}
+  """
+
+queuedReply :: Value
+queuedReply = fromJust . decodeStrictText $
+  """
+  {"action":"list","list":{"count":1,"display_offset":null,"image_key":"album-image-0001","level":2,
+  "subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"}}
   """
