@@ -48,6 +48,8 @@ library
     Roon.Error
     Roon.Moo.Message
     Roon.Registry
+    Roon.Service
+    Roon.Transport
 
   build-depends:
     , aeson                ^>=2.3
@@ -87,6 +89,7 @@ test-suite roon-api-test
     Roon.Moo.MessageSpec
     Roon.StreamlyEffSpec
     Roon.Test.Server
+    Roon.TransportSpec
 
   ghc-options:    -threaded
   build-depends:

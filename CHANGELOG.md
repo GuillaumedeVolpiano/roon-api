@@ -9,4 +9,9 @@
 * Extension registration (`Roon.Registry`) with token persistence
   (`Roon.Effect.TokenStore`).
 * `withRoon` to connect and register in one step (`Roon.Connection`).
-* `roon-probe`, a smoke test against a real server.
+* Transport service (`Roon.Transport`): zones and outputs, zone and queue
+  subscriptions, playback, seek, settings, volume and mute controls, zone
+  transfer. Queue changes are passed on undecoded for now.
+* Building blocks shared by services, among them the subscription
+  convention with its unsubscription (`Roon.Service`).
+* `roon-probe`, a smoke test against a real server; it lists the zones.

@@ -18,6 +18,7 @@ module Roon.Effect.Moo
   , openExchange
   , nextReply
   , closeExchange
+  , newSubscriptionKey
 
     -- * Requests and subscriptions
   , request
@@ -98,6 +99,7 @@ data Moo :: Effect where
   OpenExchange :: Text -> Body -> Moo m Exchange
   NextReply :: Exchange -> Moo m (Maybe Reply)
   CloseExchange :: Exchange -> Moo m ()
+  NewSubscriptionKey :: Moo m Word64
 
 type instance DispatchOf Moo = Dynamic
 
@@ -116,6 +118,12 @@ nextReply = send . NextReply
 -- This does not tell the server anything.
 closeExchange :: Moo :> es => Exchange -> Eff es ()
 closeExchange = send . CloseExchange
+
+-- | A number not yet used as a subscription key on this connection.
+-- Services tie a subscription to the key given when it is opened, and
+-- expect the same key to end it.
+newSubscriptionKey :: Moo :> es => Eff es Word64
+newSubscriptionKey = send NewSubscriptionKey
 
 -- | Send a request and wait for its final reply. Intermediate replies are
 -- discarded.
@@ -170,6 +178,7 @@ data MooState = MooState
   , pending :: TVar (Map RequestId Exchange)
   , closed :: TVar (Maybe RoonError)
   -- ^ Why no more reply will come, once the receive loop has stopped.
+  , nextSubscriptionKey :: TVar Word64
   }
 
 -- | Run MOO exchanges over a WebSocket. The handler answers the requests
@@ -180,7 +189,7 @@ runMoo
   -> Eff (Moo : es) a
   -> Eff es a
 runMoo handler action = do
-  state <- MooState <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Nothing
+  state <- MooState <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTVarIO 0
   withAsync (receiveLoop state handler) $ \_ ->
     interpret_ (handleMoo state) action
 
@@ -216,6 +225,10 @@ handleMoo state = \case
                    )
     either throwError pure outcome
   CloseExchange exchange -> atomically (forget state exchange)
+  NewSubscriptionKey -> atomically $ do
+    key <- readTVar state.nextSubscriptionKey
+    writeTVar state.nextSubscriptionKey (key + 1)
+    pure key
 
 -- | Remove an exchange from the routing table and mark it as over.
 forget :: MooState -> Exchange -> STM ()

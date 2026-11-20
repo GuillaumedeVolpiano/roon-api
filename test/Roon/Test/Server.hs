@@ -10,6 +10,7 @@ module Roon.Test.Server
     -- * The wire
   , Wire (..)
   , newWire
+  , withServer
 
     -- * Script steps
   , receiveFromClient
@@ -22,13 +23,21 @@ module Roon.Test.Server
   , field
   ) where
 
+import Control.Concurrent.Async (wait, withAsync)
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Effectful
+import Effectful.Concurrent (Concurrent, runConcurrent)
+import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
+import Roon.Effect.WebSocket (WebSocket, runWebSocketWith)
+import Roon.Error (RoonError)
 import Roon.Moo.Message
 import Roon.Registry
 import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
@@ -81,6 +90,30 @@ data Wire = Wire
 
 newWire :: IO Wire
 newWire = Wire <$> newTQueueIO <*> newTQueueIO
+
+-- The in-memory transport
+
+type ClientEffects = '[WebSocket, TokenStore, Error RoonError, Concurrent, IOE]
+
+-- | Run a client against a server script. Returns what the client
+-- produced, with the tokens it holds at the end, and what the script
+-- returned.
+withServer
+  :: Map Text Text
+  -> Eff ClientEffects a
+  -> (Wire -> IO b)
+  -> IO (Either RoonError (a, Map Text Text), b)
+withServer tokens client server = do
+  wire <- newWire
+  let sendAction frame = liftIO (True <$ atomically (writeTQueue wire.toServer frame))
+      receiveAction = liftIO (atomically (readTQueue wire.toClient))
+      runClient =
+        runEff . runConcurrent . runErrorNoCallStack . runTokenStorePure tokens $
+          runWebSocketWith sendAction receiveAction client
+  withAsync (server wire) $ \serverThread -> do
+    outcome <- runClient
+    result <- wait serverThread
+    pure (outcome, result)
 
 receiveFromClient :: Wire -> IO MooMessage
 receiveFromClient wire = do

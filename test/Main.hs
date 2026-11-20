@@ -5,6 +5,7 @@ import Roon.Effect.TokenStoreSpec qualified as TokenStoreSpec
 import Roon.Effect.WebSocketSpec qualified as WebSocketSpec
 import Roon.Moo.MessageSpec qualified as MessageSpec
 import Roon.StreamlyEffSpec qualified as StreamlyEffSpec
+import Roon.TransportSpec qualified as TransportSpec
 import Test.Tasty (defaultMain, testGroup)
 
 main :: IO ()
@@ -16,5 +17,6 @@ main =
       , TokenStoreSpec.tests
       , ConnectionSpec.tests
       , WebSocketSpec.tests
+      , TransportSpec.tests
       , StreamlyEffSpec.tests
       ]

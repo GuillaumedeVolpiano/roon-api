@@ -18,7 +18,8 @@ Early work in progress. Nothing here is stable yet.
 - [x] WebSocket transport with keep-alive
 - [x] Extension registration and token persistence
 - [ ] Server discovery (SOOD)
-- [ ] Transport service (zones, queue, playback control)
+- [x] Transport service (zones, queue, playback control); queue changes
+      not decoded yet
 - [ ] Browse service (search, library navigation, play actions)
 
 ## Building
@@ -31,7 +32,8 @@ Early work in progress. Nothing here is stable yet.
     cabal run roon-probe -- [HOST [PORT]]
 
 `roon-probe` connects to a Roon Server (by default `127.0.0.1`, port
-`9330`), registers as an extension and prints what the server answers.
+`9330`), registers as an extension, prints what the server answers and lists
+the zones.
 The first time, it waits until you enable "roon-api probe" in Roon,
 under Settings, Extensions. The token the server hands out is kept in
 `$XDG_STATE_HOME/roon-api/`.

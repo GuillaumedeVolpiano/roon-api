@@ -2,19 +2,13 @@
 -- in-memory transport.
 module Roon.ConnectionSpec (tests) where
 
-import Control.Concurrent.Async (wait, withAsync)
-import Control.Concurrent.STM (atomically, readTQueue, writeTQueue)
 import Data.Aeson (Value (..), object, (.=))
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Control.Concurrent.STM (atomically, writeTQueue)
 import Data.Text (Text)
-import Effectful
-import Effectful.Concurrent (Concurrent, runConcurrent)
-import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.Error.Static (runErrorNoCallStack)
 import Roon.Connection (runRoon)
 import Roon.Effect.Moo
-import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
-import Roon.Effect.WebSocket (WebSocket, runWebSocketWith)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message
 import Roon.Registry
@@ -120,28 +114,3 @@ tests =
   where
     both f (a, b) = (f a, f b)
     toJSONList = Array . foldMap (pure . String)
-
--- The in-memory transport
-
-type ClientEffects = '[WebSocket, TokenStore, Error RoonError, Concurrent, IOE]
-
--- | Run a client against a server script. Returns what the client
--- produced, with the tokens it holds at the end, and what the script
--- returned.
-withServer
-  :: Map Text Text
-  -> Eff ClientEffects a
-  -> (Wire -> IO b)
-  -> IO (Either RoonError (a, Map Text Text), b)
-withServer tokens client server = do
-  wire <- newWire
-  let sendAction frame = liftIO (True <$ atomically (writeTQueue wire.toServer frame))
-      receiveAction = liftIO (atomically (readTQueue wire.toClient))
-      runClient =
-        runEff . runConcurrent . runErrorNoCallStack . runTokenStorePure tokens $
-          runWebSocketWith sendAction receiveAction client
-  withAsync (server wire) $ \serverThread -> do
-    outcome <- runClient
-    result <- wait serverThread
-    pure (outcome, result)
-

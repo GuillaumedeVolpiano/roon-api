@@ -24,16 +24,15 @@ module Roon.Registry
   ) where
 
 import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
-import Data.Aeson.Types (parseEither)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (finally)
-import Roon.Effect.Moo (Moo, Reply (..), closeExchange, nextReply, openExchange, request)
+import Roon.Effect.Moo (Moo, closeExchange, nextReply, openExchange, request)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..))
+import Roon.Service (expect)
 
 -- | What an extension tells the server about itself. Roon shows the
 -- display name, the version and the publisher to the user.
@@ -131,11 +130,3 @@ registrationRequest extension token =
         [ ("website" .=) <$> extension.website
         , ("token" .=) <$> token
         ]
-
--- | Check the status of a reply and decode its JSON body.
-expect :: (FromJSON a, Error RoonError :> es) => Text -> Text -> Reply -> Eff es a
-expect requestName status reply
-  | reply.name /= status = throwError (UnexpectedReply requestName reply.name)
-  | otherwise = case reply.body of
-      JsonBody value -> either (throwError . UnexpectedReplyBody requestName . Text.pack) pure (parseEither parseJSON value)
-      _ -> throwError (UnexpectedReplyBody requestName "not a JSON body")
