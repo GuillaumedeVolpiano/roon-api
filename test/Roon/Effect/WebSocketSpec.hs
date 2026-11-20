@@ -10,13 +10,14 @@ import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Aeson (Value (..))
 import Data.Text (Text)
 import Effectful
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Network.Socket qualified as Socket
 import Network.WebSockets qualified as WS
-import Roon.Connection (withRoon)
+import Roon.Connection (Reconnect (..), withRoon, withRoonReconnecting)
 import Roon.Effect.Moo (Reply (..), request)
 import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
 import Roon.Effect.WebSocket (ServerAddress (..))
@@ -50,6 +51,22 @@ tests =
             echo <- expectRequest wire "svc:1/echo"
             answer wire echo Complete "Success" echo.body
           fmap ((.body) . fst) outcome @?= Right large
+      , testCase "connects again after losing the connection" $ do
+          let policy = Reconnect {firstDelay = 1_000, maxDelay = 10_000, maxAttempts = Just 5}
+              client address = withRoonReconnecting policy address extension $ \_ -> (.name) <$> request "svc:1/echo" NoBody
+          (outcome, ()) <- withLoopbackServer Map.empty client $ \wire -> do
+            -- The first connection is lost while the request waits.
+            registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
+            answer wire registerRequest Continue "Registered" (registered "tok-1")
+            _ <- expectRequest wire "svc:1/echo"
+            closeConnection wire
+            -- The second one answers.
+            again <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
+            field "token" again @?= Just (String "tok-1")
+            answer wire again Continue "Registered" (registered "tok-1")
+            echo <- expectRequest wire "svc:1/echo"
+            answer wire echo Complete "Again" NoBody
+          fmap fst outcome @?= Right "Again"
       , testCase "reports the loss when the server closes the connection" $ do
           (outcome, ()) <- withLoopbackServer Map.empty (withRoon' pure) $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"

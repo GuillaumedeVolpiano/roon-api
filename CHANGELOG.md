@@ -13,7 +13,9 @@
   (`registerWithin`).
 * Extension registration (`Roon.Registry`) with token persistence
   (`Roon.Effect.TokenStore`).
-* `withRoon` to connect and register in one step (`Roon.Connection`).
+* `withRoon` to connect and register in one step, and
+  `withRoonReconnecting` to connect again, with a growing delay, when the
+  connection is lost or refused (`Roon.Connection`).
 * Transport service (`Roon.Transport`): zones and outputs, zone and queue
   subscriptions, playback, seek, settings, volume and mute controls, zone
   transfer. Views of the zones and of a queue kept up to date from their

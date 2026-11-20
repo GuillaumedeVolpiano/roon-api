@@ -6,15 +6,22 @@ module Roon.Connection
   ( withRoon
   , runRoon
   , registerExtension
+
+    -- * Reconnection
+  , Reconnect (..)
+  , defaultReconnect
+  , reconnecting
+  , withRoonReconnecting
   ) where
 
 import Effectful
-import Effectful.Concurrent (Concurrent)
-import Effectful.Error.Static (Error)
+import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Concurrent.STM (atomically, newTVarIO, readTVar, writeTVar)
+import Effectful.Error.Static (Error, throwError, tryError)
 import Roon.Effect.Moo (Moo, defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (TokenStore, loadToken, saveToken)
 import Roon.Effect.WebSocket (ServerAddress, WebSocket, runWebSocket)
-import Roon.Error (RoonError)
+import Roon.Error (RoonError (..))
 import Roon.Registry (CoreInfo (..), ExtensionInfo (..), Registration (..), info, register)
 
 -- | Register the extension, reusing the stored token if there is one, and
@@ -59,3 +66,65 @@ withRoon
   -> (Registration -> Eff (Moo : WebSocket : es) a)
   -> Eff es a
 withRoon address extension = runWebSocket address . runRoon extension
+
+-- | When to try again after the connection is lost or refused.
+data Reconnect = Reconnect
+  { firstDelay :: Int
+  -- ^ Microseconds before the first new attempt. The delay doubles after
+  -- each failed attempt, and starts again from this one once an attempt
+  -- has connected.
+  , maxDelay :: Int
+  -- ^ Microseconds the delay never exceeds.
+  , maxAttempts :: Maybe Int
+  -- ^ How many attempts in a row may fail; 'Nothing' for no limit.
+  }
+  deriving stock (Eq, Show)
+
+-- | One second, doubling up to one minute, without end.
+defaultReconnect :: Reconnect
+defaultReconnect = Reconnect {firstDelay = 1_000_000, maxDelay = 60_000_000, maxAttempts = Nothing}
+
+-- | Run an action again whenever it fails with 'ConnectionLost' or
+-- 'ConnectFailed', after a growing delay. The action receives a function
+-- to call once it is connected, which resets the delay and the count of
+-- failed attempts. Other failures, and the last one when 'maxAttempts' is
+-- reached, are thrown.
+reconnecting
+  :: (Concurrent :> es, Error RoonError :> es)
+  => Reconnect
+  -> (Eff es () -> Eff es a)
+  -> Eff es a
+reconnecting policy attempt = go policy.firstDelay (1 :: Int)
+  where
+    go delay count = do
+      connected <- newTVarIO False
+      outcome <- tryError @RoonError (attempt (atomically (writeTVar connected True)))
+      wasConnected <- atomically (readTVar connected)
+      let (delay', count') = if wasConnected then (policy.firstDelay, 1) else (delay, count)
+      case outcome of
+        Right value -> pure value
+        Left (_, failure)
+          | retriable failure && maybe True (count' <) policy.maxAttempts -> do
+              threadDelay delay'
+              go (min policy.maxDelay (2 * delay')) (count' + 1)
+          | otherwise -> throwError failure
+    retriable = \case
+      ConnectionLost -> True
+      ConnectFailed _ -> True
+      _ -> False
+
+-- | 'withRoon', connecting again when the connection is lost or refused.
+-- The action runs again from the start on each new connection, so the
+-- subscriptions it opens are opened again.
+withRoonReconnecting
+  :: (IOE :> es, Concurrent :> es, TokenStore :> es, Error RoonError :> es)
+  => Reconnect
+  -> ServerAddress
+  -> ExtensionInfo
+  -> (Registration -> Eff (Moo : WebSocket : es) a)
+  -> Eff es a
+withRoonReconnecting policy address extension action =
+  reconnecting policy $ \markConnected ->
+    withRoon address extension $ \registration -> do
+      raise (raise markConnected)
+      action registration

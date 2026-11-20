@@ -7,9 +7,11 @@ import Data.Map.Strict qualified as Map
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically, writeTQueue)
 import Data.Text (Text)
-import Effectful (liftIO)
-import Effectful.Error.Static (runErrorNoCallStack)
-import Roon.Connection (runRoon)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Effectful (Eff, IOE, liftIO, runEff)
+import Effectful.Concurrent (Concurrent, runConcurrent)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Roon.Connection (Reconnect (..), reconnecting, runRoon)
 import Roon.Effect.Moo
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message
@@ -59,6 +61,25 @@ tests =
             (rejection.verb, rejection.name, rejection.requestId) @?= (Complete, "InvalidRequest", RequestId "7")
             answer wire infoRequest Complete "Success" coreBody
           fmap fst outcome @?= Right testCore
+      , testGroup
+          "reconnecting"
+          [ testCase "tries again until the action succeeds" $ do
+              (attempts, outcome) <- runAttempts (Just 5) [failWith ConnectionLost, failWith (ConnectFailed "refused"), const (pure "done")]
+              (attempts, outcome) @?= (3, Right "done")
+          , testCase "gives up after the last attempt" $ do
+              (attempts, outcome) <- runAttempts (Just 3) (repeat (failWith (ConnectFailed "refused")))
+              (attempts, outcome) @?= (3, Left (ConnectFailed "refused"))
+          , testCase "does not try again after another failure" $ do
+              (attempts, outcome) <- runAttempts (Just 5) (repeat (failWith (TimedOut "svc:1/slow")))
+              (attempts, outcome) @?= (1, Left (TimedOut "svc:1/slow"))
+          , testCase "counts again once an attempt has connected" $ do
+              let connectThenFail markConnected = markConnected >> throwError ConnectionLost
+              -- The second attempt connects: its loss starts a new series,
+              -- which the third attempt ends. Without the reset, the
+              -- second attempt would be the last.
+              (attempts, outcome) <- runAttempts (Just 2) (failWith ConnectionLost : connectThenFail : repeat (failWith ConnectionLost))
+              (attempts, outcome) @?= (3, Left ConnectionLost)
+          ]
       , testCase "routes replies while the server's request is being answered" $ do
           (gate, answered) <- (,) <$> newEmptyMVar <*> newEmptyMVar
           -- The answer to the server waits until the client has its reply.
@@ -157,3 +178,24 @@ tests =
   where
     both f (a, b) = (f a, f b)
     toJSONList = Array . foldMap (pure . String)
+
+-- | Run 'reconnecting' over a list of attempts, with short delays. Returns
+-- how many attempts ran, and the outcome.
+runAttempts
+  :: Maybe Int
+  -> [Eff '[Error RoonError, Concurrent, IOE] () -> Eff '[Error RoonError, Concurrent, IOE] Text]
+  -> IO (Int, Either RoonError Text)
+runAttempts maxAttempts attempts = do
+  remaining <- newIORef attempts
+  count <- newIORef (0 :: Int)
+  let next markConnected = do
+        liftIO (modifyIORef' count (+ 1))
+        liftIO (atomicModifyIORef' remaining (\list -> (drop 1 list, take 1 list))) >>= \case
+          [current] -> current markConnected
+          _ -> error "runAttempts: no attempt left"
+      policy = Reconnect {firstDelay = 1_000, maxDelay = 4_000, maxAttempts}
+  outcome <- runEff . runConcurrent . runErrorNoCallStack $ reconnecting policy next
+  (,outcome) <$> readIORef count
+
+failWith :: RoonError -> Eff '[Error RoonError, Concurrent, IOE] () -> Eff '[Error RoonError, Concurrent, IOE] Text
+failWith failure _ = throwError failure
