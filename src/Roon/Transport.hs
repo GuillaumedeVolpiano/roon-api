@@ -44,7 +44,10 @@ module Roon.Transport
     -- * The queue
   , QueueItem (..)
   , QueueEvent (..)
+  , QueueChange (..)
   , subscribeQueue
+  , applyQueueEvent
+  , queue
   , playFromHere
 
     -- * Controls
@@ -423,12 +426,32 @@ instance FromJSON QueueItem where
       <*> fields .: "three_line"
 
 -- | What a queue subscription reports: the first items, then changes.
--- The changes are passed on undecoded for now: their format is not
--- documented, and has yet to be observed.
 data QueueEvent
   = QueueSubscribed [QueueItem]
-  | QueueChanged Value
+  | QueueChanged [QueueChange]
   deriving stock (Eq, Show)
+
+-- | One change to the items of a queue, at a position counted from zero.
+-- When a track ends, Roon removes the items it reported and inserts the
+-- new ones.
+data QueueChange
+  = QueueRemove {index :: Int, count :: Int}
+  | QueueInsert {index :: Int, items :: [QueueItem]}
+  | -- | An operation not seen so far, kept as it came.
+    OtherQueueChange Value
+  deriving stock (Eq, Show)
+
+instance FromJSON QueueChange where
+  parseJSON value = flip (withObject "QueueChange") value $ \fields ->
+    fields .: "operation" >>= \case
+      ("remove" :: Text) -> QueueRemove <$> fields .: "index" <*> fields .: "count"
+      "insert" -> QueueInsert <$> fields .: "index" <*> fields .: "items"
+      _ -> pure (OtherQueueChange value)
+
+newtype QueueChanges = QueueChanges [QueueChange]
+
+instance FromJSON QueueChanges where
+  parseJSON = withObject "QueueChanges" $ \fields -> QueueChanges <$> fields .:? "changes" .!= []
 
 newtype QueueItems = QueueItems [QueueItem]
 
@@ -445,7 +468,23 @@ subscribeQueue
   -> Eff es a
 subscribeQueue target maxItems consume =
   subscribe transportService "queue" ["zone_or_output_id" .= zoneOrOutputId target, "max_item_count" .= maxItems] $
-    consume . subscriptionUpdates (method "subscribe_queue") (\(QueueItems items) -> QueueSubscribed items) QueueChanged
+    consume . subscriptionUpdates (method "subscribe_queue") (\(QueueItems items) -> QueueSubscribed items) (\(QueueChanges changes) -> QueueChanged changes)
+
+-- | Bring a view of the queue up to date. An 'OtherQueueChange' leaves the
+-- items as they are, and the view may then be wrong.
+applyQueueEvent :: QueueEvent -> [QueueItem] -> [QueueItem]
+applyQueueEvent = \case
+  QueueSubscribed items -> const items
+  QueueChanged changes -> \items -> foldl (flip applyChange) items changes
+  where
+    applyChange = \case
+      QueueRemove {index, count} -> \items -> take index items <> drop (index + count) items
+      QueueInsert {index, items = inserted} -> \items -> take index items <> inserted <> drop index items
+      OtherQueueChange _ -> id
+
+-- | The items as the events describe them.
+queue :: Monad m => Fold m QueueEvent [QueueItem]
+queue = Fold.foldl' (flip applyQueueEvent) []
 
 -- | Play the queue from one of its items.
 playFromHere :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es) => target -> Int -> Eff es ()

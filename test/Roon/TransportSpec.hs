@@ -106,6 +106,18 @@ tests =
             _ <- expectRequest wire "com.roonlabs.transport:2/unsubscribe_queue"
             pure ()
           fmap fst outcome @?= Right (Just (QueueSubscribed [firstSong, secondSong]))
+      , testCase "follows a queue through a real change" $ do
+          let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 5 (Stream.fold queue . Stream.take 2))
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_queue"
+            answer wire subscription Continue "Subscribed" (JsonBody capturedQueue)
+            answer wire subscription Continue "Changed" (JsonBody capturedQueueChange)
+            _ <- expectRequest wire "com.roonlabs.transport:2/unsubscribe_queue"
+            pure ()
+          fmap (map (.queueItemId) . fst) outcome @?= Right [1002, 1003, 1004, 1005, 1006]
+      , testCase "keeps a queue operation it does not know" $
+          applyQueueEvent (QueueChanged [OtherQueueChange (object ["operation" .= ("move" :: Text)])]) [firstSong]
+            @?= [firstSong]
       ]
   where
     atSeek position (NowPlaying _ len image artists one two three) = NowPlaying (Just position) len image artists one two three
@@ -149,6 +161,28 @@ realQueue = fromJust . decodeStrictText $
   {"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},
   "queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},
   "two_line":{"line1":"Second Song","line2":"The Example Band"}}]}
+  """
+
+-- | A queue of five items, as Roon reported it while Living Room played.
+capturedQueue :: Value
+capturedQueue = fromJust . decodeStrictText $
+  """
+  {"items":[{"image_key":"album-image-0001","length":306,"one_line":{"line1":"First Song - The Example Band"},"queue_item_id":1001,"three_line":{"line1":"First Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"First Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},"queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Second Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":179,"one_line":{"line1":"Third Song - The Example Band"},"queue_item_id":1003,"three_line":{"line1":"Third Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Third Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":242,"one_line":{"line1":"Fourth Song - The Example Band"},"queue_item_id":1004,"three_line":{"line1":"Fourth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fourth Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":137,"one_line":{"line1":"Fifth Song - The Example Band"},"queue_item_id":1005,"three_line":{"line1":"Fifth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fifth Song","line2":"The Example Band"}}]}
+  """
+
+-- | What Roon sent for that queue when the first track ended.
+capturedQueueChange :: Value
+capturedQueueChange = fromJust . decodeStrictText $
+  """
+  {"changes":[{"count":5,"index":0,"operation":"remove"},{"index":0,"items":[{"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},"queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Second Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":179,"one_line":{"line1":"Third Song - The Example Band"},"queue_item_id":1003,"three_line":{"line1":"Third Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Third Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":242,"one_line":{"line1":"Fourth Song - The Example Band"},"queue_item_id":1004,"three_line":{"line1":"Fourth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fourth Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":137,"one_line":{"line1":"Fifth Song - The Example Band"},"queue_item_id":1005,"three_line":{"line1":"Fifth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fifth Song","line2":"The Example Band"}},
+    {"image_key":"album-image-0001","length":181,"one_line":{"line1":"Sixth Song - The Example Band"},"queue_item_id":1006,"three_line":{"line1":"Sixth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Sixth Song","line2":"The Example Band"}}],"operation":"insert"}]}
   """
 
 livingRoom :: Zone

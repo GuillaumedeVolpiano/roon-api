@@ -18,8 +18,7 @@ Early work in progress. Nothing here is stable yet.
 - [x] WebSocket transport with keep-alive
 - [x] Extension registration and token persistence
 - [ ] Server discovery (SOOD)
-- [x] Transport service (zones, queue, playback control); queue changes
-      not decoded yet
+- [x] Transport service (zones, queue, playback control)
 - [ ] Browse service (search, library navigation, play actions)
 
 ## Building

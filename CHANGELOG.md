@@ -11,7 +11,8 @@
 * `withRoon` to connect and register in one step (`Roon.Connection`).
 * Transport service (`Roon.Transport`): zones and outputs, zone and queue
   subscriptions, playback, seek, settings, volume and mute controls, zone
-  transfer. Queue changes are passed on undecoded for now.
+  transfer. Views of the zones and of a queue kept up to date from their
+  subscriptions.
 * Building blocks shared by services, among them the subscription
   convention with its unsubscription (`Roon.Service`).
 * `roon-probe`, a smoke test against a real server; it lists the zones.
