@@ -81,6 +81,12 @@ runRoonWithin limit extension action =
       | otherwise = extension {providedServices = pingService : extension.providedServices}
 
 -- | Connect to a Roon Server, register the extension and run an action.
+--
+-- Roon keeps one connection per extension. Observed with Roon Server 2.75:
+-- when a second connection of the same extension registers, Roon sends an
+-- empty frame to the first one, which then fails with a 'ProtocolViolation'.
+-- A program that connects for each task should take its connections one at
+-- a time.
 -- The connection is closed when the action returns.
 withRoon
   :: (IOE :> es, Concurrent :> es, TokenStore :> es, Error RoonError :> es)
