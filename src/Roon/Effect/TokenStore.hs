@@ -1,3 +1,8 @@
+-- The FileSystem constraint of openBinaryTempFile is what grants the
+-- access; GHC cannot see it used, as with the lifted functions of
+-- Effectful.FileSystem.
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
 -- |
 -- Module      : Roon.Effect.TokenStore
 -- Description : Where the authorisation tokens are kept
@@ -18,29 +23,32 @@ module Roon.Effect.TokenStore
   , runTokenStorePure
   ) where
 
-import Control.Exception (bracketOnError)
 import Data.Aeson ((.:), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types qualified as Aeson
-import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret_, reinterpret_, send)
-import Effectful.State.Static.Local (gets, modify, runState)
-import System.Directory
-  ( XdgDirectory (XdgState)
+import Effectful.Dispatch.Static (unsafeEff_)
+import Effectful.Exception (bracketOnError)
+import Effectful.FileSystem
+  ( FileSystem
+  , XdgDirectory (XdgState)
   , createDirectoryIfMissing
   , doesFileExist
   , getXdgDirectory
   , removeFile
   , renameFile
   )
+import Effectful.FileSystem.IO (Handle, hClose)
+import Effectful.FileSystem.IO.ByteString qualified as ByteString
+import Effectful.FileSystem.IO.ByteString.Lazy qualified as LazyByteString
+import Effectful.State.Static.Local (gets, modify, runState)
 import System.FilePath (takeDirectory, (<.>), (</>))
-import System.IO (hClose, openBinaryTempFile)
+import System.IO qualified as IO
 
 -- | Remember the token that each server gave to this extension.
 data TokenStore :: Effect where
@@ -62,16 +70,16 @@ saveToken coreId token = send (SaveToken coreId token)
 -- The file is created readable by its owner only, and replaced
 -- atomically. A missing or unreadable file counts as empty: the cost is
 -- to enable the extension in Roon once more.
-runTokenStoreFile :: IOE :> es => FilePath -> Eff (TokenStore : es) a -> Eff es a
+runTokenStoreFile :: FileSystem :> es => FilePath -> Eff (TokenStore : es) a -> Eff es a
 runTokenStoreFile path = interpret_ $ \case
-  LoadToken coreId -> liftIO (Map.lookup coreId <$> readTokens path)
-  SaveToken coreId token -> liftIO $ do
+  LoadToken coreId -> Map.lookup coreId <$> readTokens path
+  SaveToken coreId token -> do
     tokens <- readTokens path
     writeTokens path (Map.insert coreId token tokens)
 
 -- | The conventional place for the tokens of an extension:
 -- @$XDG_STATE_HOME\/roon-api\/\<extension id\>.json@.
-defaultTokenFile :: Text -> IO FilePath
+defaultTokenFile :: FileSystem :> es => Text -> Eff es FilePath
 defaultTokenFile extensionId = do
   directory <- getXdgDirectory XdgState "roon-api"
   pure (directory </> Text.unpack extensionId <.> "json")
@@ -83,17 +91,17 @@ runTokenStorePure initial = reinterpret_ (runState initial) $ \case
   LoadToken coreId -> gets (Map.lookup coreId)
   SaveToken coreId token -> modify (Map.insert coreId token)
 
-readTokens :: FilePath -> IO (Map Text Text)
+readTokens :: FileSystem :> es => FilePath -> Eff es (Map Text Text)
 readTokens path = do
   exists <- doesFileExist path
   if not exists
     then pure Map.empty
     else do
-      contents <- BS.readFile path
+      contents <- ByteString.readFile path
       pure . maybe Map.empty id $
         Aeson.decodeStrict contents >>= Aeson.parseMaybe (Aeson.withObject "token file" (.: "tokens"))
 
-writeTokens :: FilePath -> Map Text Text -> IO ()
+writeTokens :: FileSystem :> es => FilePath -> Map Text Text -> Eff es ()
 writeTokens path tokens = do
   let directory = takeDirectory path
   createDirectoryIfMissing True directory
@@ -102,7 +110,12 @@ writeTokens path tokens = do
     (openBinaryTempFile directory "tokens.tmp")
     (\(temporary, handle) -> hClose handle >> removeFile temporary)
     ( \(temporary, handle) -> do
-        BSL.hPut handle (Aeson.encode (Aeson.object ["tokens" .= tokens]))
+        LazyByteString.hPut handle (Aeson.encode (Aeson.object ["tokens" .= tokens]))
         hClose handle
         renameFile temporary path
     )
+
+-- | Lifted 'IO.openBinaryTempFile', which "Effectful.FileSystem.IO" does
+-- not provide.
+openBinaryTempFile :: FileSystem :> es => FilePath -> String -> Eff es (FilePath, Handle)
+openBinaryTempFile directory template = unsafeEff_ (IO.openBinaryTempFile directory template)

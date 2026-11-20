@@ -1,35 +1,47 @@
 -- | @roon-probe@: connects to a Roon Server, registers as an extension and
--- prints what the server answers. A smoke test for the library against a
--- real server.
+-- prints what the server answers, then the zones. A smoke test for the
+-- library against a real server.
 module Main (main) where
 
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.IO qualified as Text
+import Data.Text.Encoding (encodeUtf8)
 import Effectful
-import Effectful.Concurrent (runConcurrent)
+import Effectful.Concurrent (Concurrent, runConcurrent)
+import Effectful.Console.ByteString (Console, runConsole)
+import Effectful.Console.ByteString qualified as Console
+import Effectful.Environment (Environment, getArgs, getProgName, runEnvironment)
 import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.FileSystem (FileSystem, runFileSystem)
+import Effectful.FileSystem.IO (stderr)
+import Effectful.FileSystem.IO.ByteString (hPutStrLn)
 import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile, saveToken)
 import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket)
 import Roon.Error (RoonError)
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), getZones)
-import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
 import Text.Read (readMaybe)
 
 main :: IO ()
-main =
+main = do
+  succeeded <- runEff . runConcurrent . runFileSystem . runConsole . runEnvironment $ program
+  if succeeded then pure () else exitFailure
+
+type Effects = '[Environment, Console, FileSystem, Concurrent, IOE]
+
+-- | 'False' when the probe failed.
+program :: Eff Effects Bool
+program =
   getArgs >>= \case
     [] -> probe localServer
     [host] -> probe localServer {host}
     [host, portText] | Just port <- readMaybe portText -> probe ServerAddress {host, port}
     _ -> do
       name <- getProgName
-      hPutStrLn stderr ("usage: " <> name <> " [HOST [PORT]]   (default: 127.0.0.1 9330)")
-      exitFailure
+      complain ("usage: " <> Text.pack name <> " [HOST [PORT]]   (default: 127.0.0.1 9330)")
+      pure False
 
 extension :: ExtensionInfo
 extension =
@@ -45,12 +57,12 @@ extension =
     , providedServices = [pingService]
     }
 
-probe :: ServerAddress -> IO ()
+probe :: ServerAddress -> Eff Effects Bool
 probe address = do
   tokenFile <- defaultTokenFile extension.extensionId
   say ("Connecting to " <> Text.pack address.host <> ":" <> Text.pack (show address.port))
   outcome <-
-    runEff . runConcurrent . runErrorNoCallStack @RoonError . runTokenStoreFile tokenFile $
+    runErrorNoCallStack @RoonError . runTokenStoreFile tokenFile $
       runWebSocket address . runMoo defaultRequestHandler $ do
         core <- info
         say ("Server: " <> core.displayName <> ", version " <> core.displayVersion)
@@ -68,10 +80,8 @@ probe address = do
         zones <- getZones
         mapM_ (say . describe) zones
   case outcome of
-    Right () -> pure ()
-    Left err -> do
-      hPutStrLn stderr ("roon-probe: " <> show err)
-      exitFailure
+    Right () -> pure True
+    Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
 
 describe :: Zone -> Text
 describe zone =
@@ -79,5 +89,8 @@ describe zone =
     Nothing -> ""
     Just playing -> ": " <> Text.intercalate " / " (playing.threeLine.line1 : maybe [] pure playing.threeLine.line2 <> maybe [] pure playing.threeLine.line3)
 
-say :: MonadIO m => Text -> m ()
-say = liftIO . Text.putStrLn
+say :: Console :> es => Text -> Eff es ()
+say = Console.putStrLn . encodeUtf8
+
+complain :: FileSystem :> es => Text -> Eff es ()
+complain = hPutStrLn stderr . encodeUtf8

@@ -3,6 +3,7 @@ module Roon.Effect.TokenStoreSpec (tests) where
 import Data.Bits ((.&.))
 import Data.Map.Strict qualified as Map
 import Effectful (runEff, runPureEff)
+import Effectful.FileSystem (runFileSystem)
 import Roon.Effect.TokenStore
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
@@ -23,18 +24,18 @@ tests =
         final @?= Map.fromList [("a", "1"), ("b", "2")]
     , testCase "the file store has no token before the file exists" $
         withSystemTempDirectory "roon-api-test" $ \directory -> do
-          loaded <- runEff . runTokenStoreFile (directory </> "missing" </> "tokens.json") $ loadToken "a"
+          loaded <- runEff . runFileSystem . runTokenStoreFile (directory </> "missing" </> "tokens.json") $ loadToken "a"
           loaded @?= Nothing
     , testCase "the file store keeps tokens across runs, one per core" $
         withSystemTempDirectory "roon-api-test" $ \directory -> do
           let path = directory </> "nested" </> "tokens.json"
-          runEff . runTokenStoreFile path $ saveToken "a" "1" >> saveToken "b" "2" >> saveToken "a" "3"
-          loaded <- runEff . runTokenStoreFile path $ (,,) <$> loadToken "a" <*> loadToken "b" <*> loadToken "c"
+          runEff . runFileSystem . runTokenStoreFile path $ saveToken "a" "1" >> saveToken "b" "2" >> saveToken "a" "3"
+          loaded <- runEff . runFileSystem . runTokenStoreFile path $ (,,) <$> loadToken "a" <*> loadToken "b" <*> loadToken "c"
           loaded @?= (Just "3", Just "2", Nothing)
     , testCase "the file is private and no temporary file is left behind" $
         withSystemTempDirectory "roon-api-test" $ \directory -> do
           let path = directory </> "tokens.json"
-          runEff . runTokenStoreFile path $ saveToken "a" "1" >> saveToken "a" "2"
+          runEff . runFileSystem . runTokenStoreFile path $ saveToken "a" "1" >> saveToken "a" "2"
           status <- getFileStatus path
           fileMode status .&. 0o077 @?= 0
           listDirectory directory >>= (@?= ["tokens.json"])
@@ -42,8 +43,8 @@ tests =
         withSystemTempDirectory "roon-api-test" $ \directory -> do
           let path = directory </> "tokens.json"
           writeFile path "not json"
-          loaded <- runEff . runTokenStoreFile path $ loadToken "a" <* saveToken "a" "1"
+          loaded <- runEff . runFileSystem . runTokenStoreFile path $ loadToken "a" <* saveToken "a" "1"
           loaded @?= Nothing
-          reloaded <- runEff . runTokenStoreFile path $ loadToken "a"
+          reloaded <- runEff . runFileSystem . runTokenStoreFile path $ loadToken "a"
           reloaded @?= Just "1"
     ]
