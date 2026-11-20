@@ -19,7 +19,7 @@ Early work in progress. Nothing here is stable yet.
 - [x] Extension registration and token persistence
 - [ ] Server discovery (SOOD)
 - [x] Transport service (zones, queue, playback control)
-- [ ] Browse service (search, library navigation, play actions)
+- [x] Browse service (search, library navigation, play actions)
 
 ## Building
 

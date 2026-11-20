@@ -21,6 +21,9 @@
   transfer. Views of the zones and of a queue kept up to date from their
   subscriptions, with seek moves held back on request (`zoneViewsEvery`).
   Zones and queues followed as one stream (`subscribeTransport`).
+* Browse service (`Roon.Browse`): browsing and loading in sessions of
+  their own, track searches run concurrently with a report for each query,
+  and the actions on a track (Play Now, Add Next, Queue, Start Radio).
 * Building blocks shared by services, among them the subscription
   convention with its unsubscription (`Roon.Service`).
 * `roon-probe`, a smoke test against a real server; it lists the zones.

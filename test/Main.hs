@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Roon.BrowseSpec qualified as BrowseSpec
 import Roon.ConnectionSpec qualified as ConnectionSpec
 import Roon.Effect.TokenStoreSpec qualified as TokenStoreSpec
 import Roon.Effect.WebSocketSpec qualified as WebSocketSpec
@@ -17,4 +18,5 @@ main =
       , ConnectionSpec.tests
       , WebSocketSpec.tests
       , TransportSpec.tests
+      , BrowseSpec.tests
       ]

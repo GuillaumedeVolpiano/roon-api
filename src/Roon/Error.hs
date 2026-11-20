@@ -25,4 +25,9 @@ data RoonError
     UnexpectedReplyBody Text Text
   | -- | No reply came in time. Carries the request name.
     TimedOut Text
+  | -- | Browsing ended on an error message from Roon. Carries the message.
+    BrowseFailed Text
+  | -- | An item expected while browsing, such as an action, is not there.
+    -- Carries what was looked for.
+    BrowseItemMissing Text
   deriving stock (Eq, Show)

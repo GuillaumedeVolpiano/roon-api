@@ -41,6 +41,7 @@ library
   import:          shared
   hs-source-dirs:  src
   exposed-modules:
+    Roon.Browse
     Roon.Connection
     Roon.Effect.Moo
     Roon.Effect.TokenStore
@@ -82,6 +83,7 @@ test-suite roon-api-test
   hs-source-dirs: test
   main-is:        Main.hs
   other-modules:
+    Roon.BrowseSpec
     Roon.ConnectionSpec
     Roon.Effect.TokenStoreSpec
     Roon.Effect.WebSocketSpec
