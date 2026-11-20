@@ -20,6 +20,7 @@ module Roon.Registry
     -- * Requests
   , info
   , register
+  , registerWithin
   , registryService
   ) where
 
@@ -29,7 +30,7 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (finally)
-import Roon.Effect.Moo (Moo, closeExchange, nextReply, openExchange, request)
+import Roon.Effect.Moo (Exchange, Moo, Reply, closeExchange, nextReply, nextReplyWithin, openExchange, request)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..))
 import Roon.Service (expect)
@@ -105,11 +106,24 @@ info = do
 -- Without a valid token for the services asked for, this waits until the
 -- user enables the extension in Roon.
 register :: (Moo :> es, Error RoonError :> es) => ExtensionInfo -> Maybe Text -> Eff es Registration
-register extension token = do
+register = registerWith nextReply
+
+-- | 'register', waiting at most a number of microseconds for the server,
+-- and so for the user. Throws 'TimedOut' when the time is up.
+registerWithin :: (Moo :> es, Error RoonError :> es) => Int -> ExtensionInfo -> Maybe Text -> Eff es Registration
+registerWithin limit = registerWith (nextReplyWithin limit)
+
+registerWith
+  :: (Moo :> es, Error RoonError :> es)
+  => (Exchange -> Eff es (Maybe Reply))
+  -> ExtensionInfo
+  -> Maybe Text
+  -> Eff es Registration
+registerWith wait extension token = do
   -- The server answers with a first reply and may keep the exchange open;
   -- only that first reply matters here.
   exchange <- openExchange name (JsonBody (registrationRequest extension token))
-  reply <- nextReply exchange `finally` closeExchange exchange
+  reply <- wait exchange `finally` closeExchange exchange
   maybe (throwError ConnectionLost) (expect name "Registered") reply
   where
     name = registryService <> "/register"

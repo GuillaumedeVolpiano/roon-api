@@ -23,4 +23,6 @@ data RoonError
   | -- | A reply had the expected status but not the expected body.
     -- Carries the request name, then the decoding error.
     UnexpectedReplyBody Text Text
+  | -- | No reply came in time. Carries the request name.
+    TimedOut Text
   deriving stock (Eq, Show)

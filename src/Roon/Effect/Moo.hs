@@ -17,11 +17,14 @@ module Roon.Effect.Moo
   , Reply (..)
   , openExchange
   , nextReply
+  , nextReplyWithin
   , closeExchange
   , newSubscriptionKey
 
     -- * Requests and subscriptions
   , request
+  , requestWithin
+  , defaultRequestTimeout
   , withSubscription
 
     -- * Interpreter
@@ -31,7 +34,8 @@ module Roon.Effect.Moo
   , pingService
   ) where
 
-import Control.Monad (unless, void)
+import Control.Monad (void, (>=>))
+import Data.Bool (bool)
 import Data.Aeson (object, (.=))
 import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
@@ -54,6 +58,7 @@ import Effectful.Concurrent.STM
   , orElse
   , readTQueue
   , readTVar
+  , registerDelay
   , retry
   , writeTQueue
   , writeTVar
@@ -90,14 +95,19 @@ data Reply = Reply
 -- | A request that has been sent, and the replies it has received so far.
 data Exchange = Exchange
   { requestId :: RequestId
+  , name :: Text
+  -- ^ The request name, for errors.
   , replies :: TQueue Reply
   , finished :: TVar Bool
   }
 
 -- | Exchange MOO messages with a Roon Server.
 data Moo :: Effect where
-  OpenExchange :: Text -> Body -> Moo m Exchange
-  NextReply :: Exchange -> Moo m (Maybe Reply)
+  -- The failures are returned rather than thrown: an error thrown by the
+  -- interpreter would reach the Error handler around 'runMoo', not the one
+  -- of the caller.
+  OpenExchange :: Text -> Body -> Moo m (Either RoonError Exchange)
+  NextReply :: Maybe Int -> Exchange -> Moo m (Either RoonError (Maybe Reply))
   CloseExchange :: Exchange -> Moo m ()
   NewSubscriptionKey :: Moo m Word64
 
@@ -105,14 +115,22 @@ type instance DispatchOf Moo = Dynamic
 
 -- | Send a request, named @service/method@, and return the handle to read
 -- its replies. Throws if the connection is closed.
-openExchange :: Moo :> es => Text -> Body -> Eff es Exchange
-openExchange name body = send (OpenExchange name body)
+openExchange :: (Moo :> es, Error RoonError :> es) => Text -> Body -> Eff es Exchange
+openExchange name body = send (OpenExchange name body) >>= either throwError pure
 
 -- | Wait for the next reply. 'Nothing' means the exchange is over: its
 -- final reply has been read, or it was closed. Throws if the connection
 -- closes first.
-nextReply :: Moo :> es => Exchange -> Eff es (Maybe Reply)
-nextReply = send . NextReply
+nextReply :: (Moo :> es, Error RoonError :> es) => Exchange -> Eff es (Maybe Reply)
+nextReply = nextReplyBefore Nothing
+
+-- | 'nextReply', waiting at most a number of microseconds. Throws
+-- 'TimedOut' when no reply comes in time; the exchange stays open.
+nextReplyWithin :: (Moo :> es, Error RoonError :> es) => Int -> Exchange -> Eff es (Maybe Reply)
+nextReplyWithin = nextReplyBefore . Just
+
+nextReplyBefore :: (Moo :> es, Error RoonError :> es) => Maybe Int -> Exchange -> Eff es (Maybe Reply)
+nextReplyBefore limit exchange = send (NextReply limit exchange) >>= either throwError pure
 
 -- | Stop listening to an exchange. Replies that arrive later are dropped.
 -- This does not tell the server anything.
@@ -125,13 +143,25 @@ closeExchange = send . CloseExchange
 newSubscriptionKey :: Moo :> es => Eff es Word64
 newSubscriptionKey = send NewSubscriptionKey
 
--- | Send a request and wait for its final reply. Intermediate replies are
--- discarded.
+-- | Send a request and wait for its final reply, at most
+-- 'defaultRequestTimeout'. Intermediate replies are discarded.
 request :: (Moo :> es, Error RoonError :> es) => Text -> Body -> Eff es Reply
-request name body = openExchange name body >>= await
+request = requestWithin (Just defaultRequestTimeout)
+
+-- | Thirty seconds, in microseconds.
+defaultRequestTimeout :: Int
+defaultRequestTimeout = 30_000_000
+
+-- | 'request' with another limit, in microseconds, for each reply;
+-- 'Nothing' waits as long as needed. Throws 'TimedOut' when a reply does
+-- not come in time.
+requestWithin :: (Moo :> es, Error RoonError :> es) => Maybe Int -> Text -> Body -> Eff es Reply
+requestWithin limit name body = do
+  exchange <- openExchange name body
+  await exchange `finally` closeExchange exchange
   where
     await exchange =
-      nextReply exchange >>= \case
+      nextReplyBefore limit exchange >>= \case
         Just reply
           | reply.final -> pure reply
           | otherwise -> await exchange
@@ -140,7 +170,7 @@ request name body = openExchange name body >>= await
 -- | Send a request and consume its replies as a stream, which ends after
 -- the final reply. The exchange is closed when the consumer returns.
 withSubscription
-  :: Moo :> es
+  :: (Moo :> es, Error RoonError :> es)
   => Text
   -> Body
   -> (Stream (Eff es) Reply -> Eff es a)
@@ -184,7 +214,7 @@ data MooState = MooState
 -- | Run MOO exchanges over a WebSocket. The handler answers the requests
 -- that the server makes.
 runMoo
-  :: (WebSocket :> es, Concurrent :> es, Error RoonError :> es)
+  :: (WebSocket :> es, Concurrent :> es)
   => RequestHandler es
   -> Eff (Moo : es) a
   -> Eff es a
@@ -194,7 +224,7 @@ runMoo handler action = do
     interpret_ (handleMoo state) action
 
 handleMoo
-  :: (WebSocket :> es, Concurrent :> es, Error RoonError :> es)
+  :: (WebSocket :> es, Concurrent :> es)
   => MooState
   -> Moo (Eff localEs) a
   -> Eff es a
@@ -206,24 +236,26 @@ handleMoo state = \case
         Nothing -> do
           requestId <- requestIdFromWord <$> readTVar state.nextId
           modifyTVar' state.nextId (+ 1)
-          exchange <- Exchange requestId <$> newTQueue <*> newTVar False
+          exchange <- Exchange requestId name <$> newTQueue <*> newTVar False
           modifyTVar' state.pending (Map.insert requestId exchange)
           pure (Right exchange)
-    exchange <- either throwError pure opened
-    sent <- sendFrame (encode MooMessage {verb = Request, name, requestId = exchange.requestId, headers = Map.empty, body})
-    unless sent $ do
-      atomically (forget state exchange)
-      throwError ConnectionLost
-    pure exchange
-  NextReply exchange -> do
-    outcome <-
-      atomically $
+    case opened of
+      Left reason -> pure (Left reason)
+      Right exchange -> do
+        sent <- sendFrame (encode MooMessage {verb = Request, name, requestId = exchange.requestId, headers = Map.empty, body})
+        if sent
+          then pure (Right exchange)
+          else Left ConnectionLost <$ atomically (forget state exchange)
+  NextReply limit exchange -> do
+    expired <- maybe (pure Nothing) (fmap Just . registerDelay) limit
+    let timer = maybe retry (readTVar >=> bool retry (pure (Left (TimedOut exchange.name)))) expired
+    atomically $
         (Right . Just <$> readTQueue exchange.replies)
           `orElse` ( readTVar exchange.finished >>= \case
                        True -> pure (Right Nothing)
                        False -> readTVar state.closed >>= maybe retry (pure . Left)
                    )
-    either throwError pure outcome
+          `orElse` timer
   CloseExchange exchange -> atomically (forget state exchange)
   NewSubscriptionKey -> atomically $ do
     key <- readTVar state.nextSubscriptionKey

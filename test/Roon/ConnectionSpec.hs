@@ -84,13 +84,16 @@ tests =
             closeConnection wire
           fmap fst outcome @?= Left ConnectionLost
       , testCase "refuses new requests once the connection is closed" $ do
+          -- Both failures reach the handler of the caller, not the one
+          -- around runMoo.
           let client = runMoo defaultRequestHandler $ do
-                _ <- runErrorNoCallStack @RoonError info
-                info
+                first <- runErrorNoCallStack @RoonError info
+                second <- runErrorNoCallStack @RoonError info
+                pure (first, second)
           (outcome, ()) <- withServer Map.empty client $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
             closeConnection wire
-          fmap fst outcome @?= Left ConnectionLost
+          fmap fst outcome @?= Right (Left ConnectionLost, Left ConnectionLost)
       , testCase "reports a frame that is not a MOO message" $ do
           (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
@@ -98,6 +101,24 @@ tests =
           case fmap fst outcome of
             Left (ProtocolViolation _) -> pure ()
             other -> assertFailure ("unexpected outcome: " <> show other)
+      , testCase "gives up on a request that gets no reply in time" $ do
+          let client = runMoo defaultRequestHandler $ do
+                late <- runErrorNoCallStack @RoonError (requestWithin (Just 50_000) "svc:1/slow" NoBody)
+                next <- request "svc:1/fast" NoBody
+                pure (late, next.name)
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            slow <- expectRequest wire "svc:1/slow"
+            fast <- expectRequest wire "svc:1/fast"
+            -- Too late: the client has stopped waiting, and drops it.
+            answer wire slow Complete "Late" NoBody
+            answer wire fast Complete "Fast" NoBody
+          fmap fst outcome @?= Right (Left (TimedOut "svc:1/slow"), "Fast")
+      , testCase "gives up on a registration that is not enabled in time" $ do
+          let client = runMoo defaultRequestHandler (registerWithin 50_000 extension Nothing)
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            _ <- expectRequest wire "com.roonlabs.registry:1/register"
+            pure ()
+          fmap fst outcome @?= Left (TimedOut "com.roonlabs.registry:1/register")
       , testCase "reports an unexpected status" $ do
           (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
             infoRequest <- expectRequest wire "com.roonlabs.registry:1/info"
