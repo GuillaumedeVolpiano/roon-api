@@ -5,3 +5,4 @@ cabal.project.local*
 *.o
 .claude/
 .mcp.json
+CLAUDE.md
