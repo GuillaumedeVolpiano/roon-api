@@ -50,6 +50,10 @@ module Roon.Transport
   , subscribeQueue
   , applyQueueEvent
   , queue
+
+    -- * Following zones and queues together
+  , TransportEvent (..)
+  , subscribeTransport
   , playFromHere
 
     -- * Controls
@@ -88,6 +92,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Effectful
 import Effectful.Error.Static (Error)
+import Effectful.Streamly.Stream qualified as Concurrent
 import Roon.Effect.Moo (Moo, request)
 import Roon.Error (RoonError)
 import Roon.Moo.Message (Body (..))
@@ -514,6 +519,31 @@ applyQueueEvent = \case
 -- | The items as the events describe them.
 queue :: Monad m => Fold m QueueEvent [QueueItem]
 queue = Fold.foldl' (flip applyQueueEvent) []
+
+-- | An event of one of the subscriptions of 'subscribeTransport'.
+data TransportEvent
+  = ZoneUpdate ZoneEvent
+  | QueueUpdate ZoneId QueueEvent
+  deriving stock (Eq, Show)
+
+-- | Follow the zones and the queues of some of them, as one stream. The
+-- events of each subscription keep their order; those of different
+-- subscriptions are interleaved as they come. Returning from the consumer
+-- ends every subscription.
+subscribeTransport
+  :: (IOE :> es, Moo :> es, Error RoonError :> es)
+  => [ZoneId]
+  -- ^ The zones whose queue to follow.
+  -> Int
+  -- ^ The most items to report for each queue.
+  -> (Stream (Eff es) TransportEvent -> Eff es a)
+  -> Eff es a
+subscribeTransport queueZones maxItems consume =
+  subscribeZones $ \zoneEvents -> withQueues queueZones [ZoneUpdate <$> zoneEvents]
+  where
+    withQueues [] streams = consume (Concurrent.parList id streams)
+    withQueues (zoneId : rest) streams =
+      subscribeQueue zoneId maxItems $ \queueEvents -> withQueues rest ((QueueUpdate zoneId <$> queueEvents) : streams)
 
 -- | Play the queue from one of its items.
 playFromHere :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es) => target -> Int -> Eff es ()

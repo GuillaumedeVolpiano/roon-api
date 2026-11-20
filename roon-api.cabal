@@ -59,6 +59,7 @@ library
     , directory            ^>=1.3
     , effectful            ^>=2.7
     , effectful-core       ^>=2.7.1
+    , effectful-streamly   ^>=0.1
     , effectful-websockets ^>=0.1
     , filepath             ^>=1.5
     , streamly-bytestring  ^>=0.2.3

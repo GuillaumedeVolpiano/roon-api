@@ -6,6 +6,7 @@
 module Roon.TransportSpec (tests) where
 
 import Data.Aeson (Value (..), decodeStrictText, object, (.=))
+import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -108,6 +109,18 @@ tests =
             _ <- expectRequest wire "com.roonlabs.transport:2/unsubscribe_zones"
             pure ()
           fmap fst outcome @?= Left (UnexpectedReply "com.roonlabs.transport:2/subscribe_zones" "NotAllowed")
+      , testCase "follows zones and queues as one stream" $ do
+          let client = runMoo defaultRequestHandler (subscribeTransport [livingRoom.zoneId] 2 (Stream.toList . Stream.take 2))
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            zoneSubscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_zones"
+            queueSubscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_queue"
+            answer wire queueSubscription Continue "Subscribed" (JsonBody realQueue)
+            answer wire zoneSubscription Continue "Subscribed" (JsonBody realZones)
+            ends <- (,) <$> receiveFromClient wire <*> receiveFromClient wire
+            let names = [(fst ends).name, (snd ends).name]
+            sort names @?= ["com.roonlabs.transport:2/unsubscribe_queue", "com.roonlabs.transport:2/unsubscribe_zones"]
+          fmap (sortOn show . fst) outcome
+            @?= Right (sortOn show [QueueUpdate livingRoom.zoneId (QueueSubscribed [firstSong, secondSong]), ZoneUpdate (ZonesSubscribed [livingRoom])])
       , testCase "reads the first items of a queue" $ do
           let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 2 (Stream.fold Fold.one))
           (outcome, ()) <- withServer Map.empty client $ \wire -> do
