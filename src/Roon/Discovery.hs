@@ -29,7 +29,7 @@ module Roon.Discovery
   , coreFromAnswer
   ) where
 
-import Data.Bits (shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (shiftR, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.List (nubBy)
@@ -37,8 +37,9 @@ import Data.Function (on)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Data.Word (Word8)
+import Control.Monad (when)
 import Effectful
+import FlatParse.Basic qualified as FP
 import GHC.Clock (getMonotonicTimeNSec)
 import Network.Socket qualified as Socket
 import Roon.Effect.WebSocket (ServerAddress (..))
@@ -77,36 +78,30 @@ encodeSood SoodMessage {kind, properties} =
 -- | Decode a datagram. 'Nothing' if it is not SOOD version 2, or if a
 -- property is cut short.
 decodeSood :: ByteString -> Maybe SoodMessage
-decodeSood bytes = do
-  rest <- ByteString.stripPrefix "SOOD" bytes
-  (version, rest') <- ByteString.uncons rest
-  (kindByte, body) <- ByteString.uncons rest'
-  if version /= 2 then Nothing else SoodMessage (toChar kindByte) <$> decodeProperties body
-  where
-    toChar = toEnum . fromIntegral :: Word8 -> Char
+decodeSood bytes = case FP.runParser soodParser bytes of
+  FP.OK message _ -> Just message
+  _ -> Nothing
 
-decodeProperties :: ByteString -> Maybe [(Text, Maybe Text)]
-decodeProperties bytes
-  | ByteString.null bytes = Just []
-  | otherwise = do
-      (nameLength, afterLength) <- ByteString.uncons bytes
-      if nameLength == 0 then Nothing else pure ()
-      (nameBytes, afterName) <- exactly (fromIntegral nameLength) afterLength
-      name <- either (const Nothing) Just (decodeUtf8' nameBytes)
-      (lengthBytes, afterValueLength) <- exactly 2 afterName
-      let valueLength = (fromIntegral (ByteString.index lengthBytes 0) `shiftL` 8) .|. fromIntegral (ByteString.index lengthBytes 1) :: Int
-      (value, rest) <-
-        if valueLength == 0xffff
-          then Just (Nothing, afterValueLength)
-          else do
-            (valueBytes, rest) <- exactly valueLength afterValueLength
-            text <- either (const Nothing) Just (decodeUtf8' valueBytes)
-            Just (Just text, rest)
-      ((name, value) :) <$> decodeProperties rest
+-- | A SOOD datagram, read to its end: the mark, the version, the type,
+-- then properties, each a name with its length on one byte and a value
+-- with its length on two, 0xffff standing for no value.
+soodParser :: FP.Parser () SoodMessage
+soodParser = do
+  FP.byteString "SOOD"
+  FP.word8 2
+  kindByte <- FP.anyWord8
+  properties <- FP.many property
+  FP.eof
+  pure SoodMessage {kind = toEnum (fromIntegral kindByte), properties}
   where
-    exactly n input
-      | ByteString.length input < n = Nothing
-      | otherwise = Just (ByteString.splitAt n input)
+    property = do
+      nameLength <- FP.anyWord8
+      when (nameLength == 0) FP.failed
+      name <- utf8 (FP.take (fromIntegral nameLength))
+      valueLength <- FP.anyWord16be
+      value <- if valueLength == 0xffff then pure Nothing else Just <$> utf8 (FP.take (fromIntegral valueLength))
+      pure (name, value)
+    utf8 parser = parser >>= either (const FP.failed) pure . decodeUtf8'
 
 -- | A Roon Server found on the network.
 data Core = Core

@@ -41,6 +41,7 @@ import Roon.Moo.Message (Body (..), MooMessage (..), RequestId (..), Verb (..))
 import Roon.Moo.Message qualified as Moo
 import Roon.Registry (ExtensionInfo (..))
 import Roon.Transport (Zone)
+import Streamly.Data.Array qualified as Array
 import Streamly.Data.Fold qualified as Fold
 import Streamly.Data.Parser (Parser)
 import Streamly.Data.Parser qualified as Parser
@@ -62,9 +63,9 @@ main = do
   defaultMain
     [ bgroup
         "MOO header block"
-        [ bench "streamly Parser, monadic (as in Roon.Moo.Message)" (nf (run mooMonadic) block)
-        , bench "streamly Parser, applicative" (nf (run mooApplicative) block)
-        , bench "flatparse" (nf (flat mooFlat) block)
+        [ bench "Streamly parser, monadic (as Roon.Moo.Message was)" (nf (run mooMonadic) block)
+        , bench "Streamly parser, applicative" (nf (run mooApplicative) block)
+        , bench "flatparse (as Roon.Moo.Message is)" (nf (flat mooFlat) block)
         , bench "ByteString splitting by hand (a floor, not a proposal)" (nf mooByHand block)
         ]
     , bgroup
@@ -73,10 +74,12 @@ main = do
         ]
     , bgroup
         "HTTP response head"
-        [ bench "streamly-http as it is (parser over arrays, ParserK)" $
+        [ bench "streamly-http as it is (flatparse, through streamly-flatparse)" $
             nfIO (summary . fst <$> readResponseHeadWithin (Just 65536) (StreamK.fromPure (StreamlyBS.toArray httpHead)))
-        , bench "the same parser over a stream of bytes" (nf (fmap summary . run responseHead) httpHead)
-        , bench "flatparse" (nf (flat httpFlat) httpHead)
+        , bench "streamly-http as it was (Streamly parser over arrays, ParserK)" $
+            nf (either (const Nothing) Just . runIdentity . Array.parse (Array.toParserK streamlyHead) . StreamK.fromPure . StreamlyBS.toArray) httpHead
+        , bench "the Streamly parser over a stream of bytes" (nf (run streamlyHead) httpHead)
+        , bench "a flatparse parser written for this benchmark" (nf (flat httpFlat) httpHead)
         ]
     , bgroup
         "JSON body of the zones"
@@ -91,8 +94,9 @@ main = do
         "the ways compared agree"
         [ testCase "MOO header block" $
             assertBool "differ" (all (== run mooMonadic block) [run mooApplicative block, flat mooFlat block, Just (mooByHand block)])
-        , testCase "HTTP head" $
-            fmap summary (run responseHead httpHead) @?= flat httpFlat httpHead
+        , testCase "HTTP head" $ do
+            fmap summary (flat (responseHead <* FP.eof) httpHead) @?= flat httpFlat httpHead
+            run streamlyHead httpHead @?= flat httpFlat httpHead
         , testCase "JSON" $
             flat (jsonFlat <* FP.eof) zonesJson @?= Aeson.decodeStrict zonesJson
         ]
@@ -100,7 +104,7 @@ main = do
   where
     run :: Parser Word8 Identity a -> ByteString -> Maybe a
     run parser bytes = either (const Nothing) Just (runIdentity (Stream.parse parser (Stream.unfold StreamlyBS.reader bytes)))
-    flat :: FP.Parser () a -> ByteString -> Maybe a
+    flat :: FP.Parser e a -> ByteString -> Maybe a
     flat parser bytes = case FP.runParser parser bytes of
       FP.OK found _ -> Just found
       _ -> Nothing
@@ -231,6 +235,31 @@ mooByHand block = case BS8.lines block of
        in (Text.decodeUtf8Lenient key, Text.decodeUtf8Lenient (BS.dropWhile (== 32) (BS.drop 1 value)))
 
 -- The HTTP head
+
+-- | The parser of streamly-http before it moved to flatparse.
+streamlyHead :: Parser Word8 Identity (Int, ByteString, [(ByteString, ByteString)])
+streamlyHead = do
+  void (Parser.listEq (BS.unpack "HTTP/1."))
+  void (Parser.satisfy isDigitByte)
+  void (Parser.satisfy (== 32))
+  digits <- Parser.takeWhile1 isDigitByte Fold.toList
+  reason <- restOfLine
+  found <- Parser.many headerLine Fold.toList
+  Parser.dropWhile (== 13)
+  void (Parser.satisfy (== 10))
+  pure (foldl' (\total byte -> total * 10 + fromIntegral (byte - 48)) 0 digits, reason, found)
+  where
+    headerLine = do
+      name <- Parser.takeWhile1 (\byte -> byte > 32 && byte < 127 && byte /= 58) Fold.toList
+      void (Parser.satisfy (== 58))
+      value <- restOfLine
+      pure (BS.map (\byte -> if byte >= 65 && byte <= 90 then byte + 32 else byte) (BS.pack name), value)
+    restOfLine = do
+      bytes <- Parser.takeWhile (/= 10) Fold.toList
+      void (Parser.satisfy (== 10))
+      pure (BS.dropWhile blank (BS.dropWhileEnd blank (BS.pack bytes)))
+    blank byte = byte == 32 || byte == 9 || byte == 13
+    isDigitByte byte = byte >= 48 && byte <= 57
 
 httpFlat :: FP.Parser () (Int, ByteString, [(ByteString, ByteString)])
 httpFlat = do

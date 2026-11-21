@@ -34,25 +34,20 @@ module Roon.Moo.Message
   , splitServiceMethod
   ) where
 
-import Control.Monad (void, when)
+import Control.Monad (when)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as BSL
-import Data.Functor.Identity (Identity (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
-import Data.Word (Word64, Word8)
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Parser (Parser)
-import Streamly.Data.Parser qualified as Parser
-import Streamly.Data.Stream qualified as Stream
-import Streamly.External.ByteString qualified as StreamlyBS
+import Data.Word (Word64)
+import FlatParse.Basic qualified as FP
 import Text.Read (readMaybe)
 
 -- | The kind of a MOO message.
@@ -185,9 +180,11 @@ parse frame = do
   -- is a sequence of terminated lines.
   let headerLines = BS.take (BS.length headerBlock + 1) frame
   (verbName, name, headerList) <-
-    case runIdentity (Stream.parsePos headerBlockParser (Stream.unfold StreamlyBS.reader headerLines)) of
-      Left (Parser.ParseErrorPos offset reason) -> Left (MalformedHeader offset reason)
-      Right parsed -> Right parsed
+    case FP.runParser headerBlockParser headerLines of
+      FP.OK parsed _ -> Right parsed
+      -- The position of an error is counted from the end of the input.
+      FP.Err (FP.Pos fromEnd, reason) -> Left (MalformedHeader (BS.length headerLines - fromEnd) reason)
+      FP.Fail -> Left (MalformedHeader 0 "not a MOO header block")
   verb <- case verbName of
     "REQUEST" -> Right Request
     "CONTINUE" -> Right Continue
@@ -217,37 +214,34 @@ parse frame = do
   pure MooMessage {verb, name, requestId, headers, body}
 
 -- | The first line and the header lines, each ended by a line feed.
--- Yields the verb, the name and the headers in order.
---
--- Every line must be terminated, including the last one. With
--- streamly-core 0.3.3, if the input ends while the parser repeated by
--- 'Parser.many' is part-way through a line, what it consumed is dropped
--- and a following 'Parser.eof' succeeds: an unterminated, malformed last
--- line would go unnoticed.
-headerBlockParser :: Parser Word8 Identity (Text, Text, [(Text, Text)])
+-- Yields the verb, the name and the headers in order. A line that is not
+-- what it should be is an error, with the position where it starts.
+headerBlockParser :: FP.Parser (FP.Pos, String) (Text, Text, [(Text, Text)])
 headerBlockParser = do
-  void (Parser.listEq (BS.unpack "MOO/1 "))
-  verbName <- utf8 (Parser.takeWhile1 isUpperAscii Fold.toList)
-  void (Parser.satisfy (== space))
-  name <- restOfLine
-  headerList <- Parser.many headerLine Fold.toList
-  Parser.eof
+  (verbName, name) <- wholeLine "the first line is not MOO/1, a verb in capitals and a name" $ do
+    FP.byteString "MOO/1 "
+    verbName <- utf8 (FP.byteStringOf (FP.skipSome (FP.skipSatisfyAscii (\char -> char >= 'A' && char <= 'Z'))))
+    FP.word8 space
+    name <- restOfLine
+    pure (verbName, name)
+  headerList <- FP.many (FP.fails FP.eof *> wholeLine "a header line is not a key, a colon and a value" headerLine)
+  FP.eof
   pure (verbName, name, headerList)
   where
     -- @Key: value@. The spaces after the colon are optional.
     headerLine = do
-      key <- utf8 (Parser.takeWhile1 (\byte -> byte /= colon && byte /= lineFeed) Fold.toList)
-      void (Parser.satisfy (== colon))
-      Parser.dropWhile (== space)
+      key <- utf8 (FP.byteStringOf (FP.skipSome (notByte colon)))
+      FP.word8 colon
+      FP.skipMany (FP.word8 space)
       value <- restOfLine
       pure (key, value)
-    restOfLine = utf8 (Parser.takeWhile (/= lineFeed) Fold.toList) <* Parser.satisfy (== lineFeed)
-    utf8 bytesParser = do
-      bytes <- bytesParser
-      case Text.decodeUtf8' (BS.pack bytes) of
-        Left _ -> Parser.die "invalid UTF-8"
-        Right decoded -> pure decoded
-    isUpperAscii byte = byte >= 65 && byte <= 90
+    restOfLine = utf8 (FP.byteStringOf (FP.skipMany (notByte lineFeed))) <* FP.word8 lineFeed
+    -- A line, or an error that names what is wrong and where it starts.
+    wholeLine problem content = do
+      start <- FP.getPos
+      content `FP.cut` (start, problem)
+    utf8 bytesParser = bytesParser >>= either (const FP.failed) pure . Text.decodeUtf8'
+    notByte excluded = FP.anyWord8 >>= \byte -> if byte == excluded || byte == lineFeed then FP.failed else pure ()
     space = 32
     colon = 58
     lineFeed = 10

@@ -65,6 +65,7 @@ library
     , effectful-streamly-http ^>=0.1
     , effectful-websockets ^>=0.1
     , filepath             ^>=1.5
+    , flatparse            ^>=0.5
     , network              ^>=3.2
     , streamly-bytestring  ^>=0.2.3
     , streamly-core        ^>=0.3.3
