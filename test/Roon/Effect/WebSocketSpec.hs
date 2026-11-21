@@ -10,8 +10,11 @@ import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), object, (.=))
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Streamly.Data.Stream qualified as Stream
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Effectful
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
@@ -20,20 +23,44 @@ import Network.WebSockets qualified as WS
 import Roon.Connection (Reconnect (..), withRoon, withRoonReconnecting)
 import Roon.Effect.Moo (Reply (..), request)
 import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
-import Roon.Effect.WebSocket (ServerAddress (..))
+import Roon.Effect.WebSocket (ServerAddress (..), describeFrame, frames, runWebSocketWith, sendFrame, traceFrames)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message
 import Roon.Registry
 import Roon.Test.Server
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
-import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 tests :: TestTree
 tests =
   localOption (mkTimeout 10_000_000) $
     testGroup
       "Roon.Effect.WebSocket"
-      [ testCase "registers over a real WebSocket" $ do
+      [ testGroup
+          "tracing"
+          [ testCase "describes each kind of frame" $ do
+              let frame verb name requestId body = encode MooMessage {verb, name, requestId = RequestId requestId, headers = Map.empty, body}
+              describeFrame 20 "" @?= "empty frame"
+              describeFrame 40 (frame Request "svc:1/get" "3" (JsonBody (object ["a" .= (1 :: Int)])))
+                @?= "REQUEST svc:1/get [3] {\"a\":1}"
+              describeFrame 10 (frame Complete "Success" "3" (JsonBody (object ["long" .= ("abcdefghij" :: Text)])))
+                @?= "COMPLETE Success [3] {\"long\":\"a... (21 characters)"
+              describeFrame 20 (frame Continue "Changed" "4" NoBody) @?= "CONTINUE Changed [4]"
+              describeFrame 20 (frame Complete "Success" "5" (RawBody "image/jpeg" "\255\216\255"))
+                @?= "COMPLETE Success [5] image/jpeg, 3 bytes"
+              let unreadable = describeFrame 80 "HTTP/1.1 400 Bad Request\n\n"
+              assertBool (show unreadable) $
+                "not a MOO message (" `Text.isPrefixOf` unreadable && "): HTTP/1.1 400 Bad Request\\n\\n" `Text.isSuffixOf` unreadable
+          , testCase "reports the frames of a connection" $ do
+              lines' <- newIORef []
+              let reply = encode MooMessage {verb = Complete, name = "Success", requestId = RequestId "0", headers = Map.empty, body = NoBody}
+              inbox <- newIORef [Just reply, Nothing]
+              _ <- runEff . runWebSocketWith (\_ -> pure True) (liftIO (atomicModifyIORef' inbox (\case (x : rest) -> (rest, x); [] -> ([], Nothing)))) $
+                traceFrames 80 (\line -> liftIO (modifyIORef' lines' (line :))) $
+                  sendFrame "MOO/1 REQUEST svc:1/ask\nRequest-Id: 0\n\n" >> Stream.toList frames
+              reverse <$> readIORef lines' >>= (@?= ["-> REQUEST svc:1/ask [0]", "<- COMPLETE Success [0]", "<- connection closed"])
+          ]
+      , testCase "registers over a real WebSocket" $ do
           (outcome, ()) <- withLoopbackServer Map.empty (withRoon' pure) $ \wire -> do
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             sendToClient wire (serverRequest "0" "com.roonlabs.ping:1/ping")

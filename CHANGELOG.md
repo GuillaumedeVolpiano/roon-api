@@ -4,7 +4,7 @@
 
 * MOO message format: types, encoder and parser (`Roon.Moo.Message`).
 * WebSocket transport with ping and pong (`Roon.Effect.WebSocket`), over
-  `effectful-websockets`.
+  `effectful-websockets`, and a trace of the MOO frames (`traceFrames`).
 * Requests and subscriptions multiplexed over one connection, and replies
   to the requests of the server in a thread of their own
   (`Roon.Effect.Moo`).
@@ -26,4 +26,5 @@
   and the actions on a track (Play Now, Add Next, Queue, Start Radio).
 * Building blocks shared by services, among them the subscription
   convention with its unsubscription (`Roon.Service`).
-* `roon-probe`, a smoke test against a real server; it lists the zones.
+* `roon-probe`, a smoke test against a real server; it lists the zones, and
+  describes every frame when `ROON_TRACE` is set.

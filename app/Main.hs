@@ -10,14 +10,14 @@ import Effectful
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Console.ByteString (Console, runConsole)
 import Effectful.Console.ByteString qualified as Console
-import Effectful.Environment (Environment, getArgs, getProgName, runEnvironment)
+import Effectful.Environment (Environment, getArgs, getProgName, lookupEnv, runEnvironment)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.FileSystem.IO (stderr)
 import Effectful.FileSystem.IO.ByteString (hPutStrLn)
 import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile, saveToken)
-import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket)
+import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket, traceFrames)
 import Roon.Error (RoonError)
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), getZones)
@@ -40,7 +40,7 @@ program =
     [host, portText] | Just port <- readMaybe portText -> probe ServerAddress {host, port}
     _ -> do
       name <- getProgName
-      complain ("usage: " <> Text.pack name <> " [HOST [PORT]]   (default: 127.0.0.1 9330)")
+      complain ("usage: " <> Text.pack name <> " [HOST [PORT]]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame)")
       pure False
 
 extension :: ExtensionInfo
@@ -60,10 +60,13 @@ extension =
 probe :: ServerAddress -> Eff Effects Bool
 probe address = do
   tokenFile <- defaultTokenFile extension.extensionId
+  -- ROON_TRACE, when set, describes every frame on stderr.
+  tracing <- maybe False (not . null) <$> lookupEnv "ROON_TRACE"
+  let trace = if tracing then traceFrames 300 complain else id
   say ("Connecting to " <> Text.pack address.host <> ":" <> Text.pack (show address.port))
   outcome <-
     runErrorNoCallStack @RoonError . runTokenStoreFile tokenFile $
-      runWebSocket address . runMoo defaultRequestHandler $ do
+      runWebSocket address . trace . runMoo defaultRequestHandler $ do
         core <- info
         say ("Server: " <> core.displayName <> ", version " <> core.displayVersion)
         say ("Core id: " <> core.coreId)

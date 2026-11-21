@@ -42,7 +42,8 @@ next to this repository.
 the zones.
 The first time, it waits until you enable "roon-api probe" in Roon,
 under Settings, Extensions. The token the server hands out is kept in
-`$XDG_STATE_HOME/roon-api/`.
+`$XDG_STATE_HOME/roon-api/`. With `ROON_TRACE=1`, it describes every
+frame sent and received on stderr.
 
 Tested with GHC 9.12.4.
 
