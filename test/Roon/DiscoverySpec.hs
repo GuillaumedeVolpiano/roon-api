@@ -3,7 +3,7 @@ module Roon.DiscoverySpec (tests) where
 
 import Control.Concurrent.Async (withAsync)
 import Control.Exception (bracket)
-import Control.Monad (forever, void)
+import Control.Monad (void)
 import Data.ByteString qualified as ByteString
 import Effectful (runEff)
 import Network.Socket qualified as Socket
@@ -50,6 +50,12 @@ tests =
           withFakeServer $ \port -> do
             cores <- runEff (discover DiscoveryOptions {targets = [(loopback, port)], wait = 300_000})
             map (\core -> (core.uniqueId, core.address)) cores @?= [("core-1", ServerAddress {host = "127.0.0.1", port = 9330})]
+      , testCase "finds it again: each query has a transaction id of its own" $
+          withFakeServer $ \port -> do
+            let options = DiscoveryOptions {targets = [(loopback, port)], wait = 300_000}
+            first <- runEff (discover options)
+            second <- runEff (discover options)
+            (length first, length second) @?= (1, 1)
       ]
   where
     answer extra =
@@ -67,8 +73,9 @@ tests =
 loopback :: Socket.HostAddress
 loopback = Socket.tupleToHostAddress (127, 0, 0, 1)
 
--- | A server that answers every query three times, as Roon does several
--- times, on a free loopback port.
+-- | A server on a free loopback port that answers every query three
+-- times, as Roon answers several times, and, like Roon, ignores a query
+-- with the transaction id of the previous one, or without any.
 withFakeServer :: (Socket.PortNumber -> IO a) -> IO a
 withFakeServer run =
   bracket (Socket.socket Socket.AF_INET Socket.Datagram Socket.defaultProtocol) Socket.close $ \socket -> do
@@ -80,9 +87,13 @@ withFakeServer run =
               { kind = 'R'
               , properties = [("unique_id", Just "core-1"), ("service_id", Just roonServiceId), ("http_port", Just "9330")]
               }
-        serve = forever $ do
+        serve previous = do
           (query, sender) <- SocketBytes.recvFrom socket 65535
           case decodeSood query of
-            Just SoodMessage {kind = 'Q'} -> mapM_ (const (void (SocketBytes.sendTo socket reply sender))) [1 .. 3 :: Int]
-            _ -> pure ()
-    withAsync serve (const (run port))
+            Just SoodMessage {kind = 'Q', properties}
+              | Just (Just transaction) <- lookup "_tid" properties
+              , Just transaction /= previous -> do
+                  mapM_ (const (void (SocketBytes.sendTo socket reply sender))) [1 .. 3 :: Int]
+                  serve (Just transaction)
+            _ -> serve previous
+    withAsync (serve Nothing) (const (run port))

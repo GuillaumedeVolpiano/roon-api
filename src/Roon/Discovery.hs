@@ -10,7 +10,8 @@
 --
 -- Observed with Roon Server 2.75: a server answers each query several
 -- times, and its answers do not repeat the transaction id of the query.
--- Answers are told apart by the unique id of the server.
+-- Answers are told apart by the unique id of the server. A query without a
+-- transaction id of its own was answered only the first time.
 --
 -- Queries go out through the default interface only.
 module Roon.Discovery
@@ -40,7 +41,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word8)
 import Effectful
-import GHC.Clock (getMonotonicTime)
+import GHC.Clock (getMonotonicTime, getMonotonicTimeNSec)
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketBytes
 import Roon.Effect.WebSocket (ServerAddress (..))
@@ -168,13 +169,16 @@ discover :: IOE :> es => DiscoveryOptions -> Eff es [Core]
 discover options = liftIO . bracket open Socket.close $ \socket -> do
   Socket.setSocketOption socket Socket.Broadcast 1
   Socket.bind socket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (0, 0, 0, 0)))
+  -- A transaction id of its own for each query: with none, Roon Server
+  -- 2.75 answered the first query only.
+  transaction <- Text.pack . show <$> getMonotonicTimeNSec
+  let query = encodeSood SoodMessage {kind = 'Q', properties = [("query_service_id", Just roonServiceId), ("_tid", Just transaction)]}
   forM_ options.targets $ \(host, port) ->
     SocketBytes.sendTo socket query (Socket.SockAddrInet port host)
   deadline <- (+ fromIntegral options.wait / 1_000_000) <$> getMonotonicTime
   nubBy ((==) `on` (.uniqueId)) <$> collect socket deadline
   where
     open = Socket.socket Socket.AF_INET Socket.Datagram Socket.defaultProtocol
-    query = encodeSood SoodMessage {kind = 'Q', properties = [("query_service_id", Just roonServiceId)]}
     collect socket deadline = do
       now <- getMonotonicTime
       let remaining = round ((deadline - now) * 1_000_000) :: Int
