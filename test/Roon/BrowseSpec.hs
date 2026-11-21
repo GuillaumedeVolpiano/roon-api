@@ -95,6 +95,29 @@ tests =
             (field "item_key" addNext, field "zone_or_output_id" addNext) @?= (Just (String "4:1"), Just (String "zone-1"))
             answer wire addNext Complete "Success" (JsonBody queuedReply)
           fmap fst outcome @?= Right ()
+      , testCase "plays an album found by a search, which first opens on itself" $ do
+          let album = Candidate {session = Session Search (Just "s"), item = Item {title = "An Album", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:0", hint = Just ListItem, inputPrompt = Nothing}}
+              client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle Queue) album)
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            openHit <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" openHit @?= Just (String "1:0")
+            answer wire openHit Complete "Success" listAction
+            itself <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire itself Complete "Success" (JsonBody albumItselfLevel)
+            openAlbum <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" openAlbum @?= Just (String "5:0")
+            answer wire openAlbum Complete "Success" listAction
+            tracks <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire tracks Complete "Success" (JsonBody albumLevel)
+            openPlay <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" openPlay @?= Just (String "2:0")
+            answer wire openPlay Complete "Success" listAction
+            actions <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire actions Complete "Success" (JsonBody actionLevel)
+            queue <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" queue @?= Just (String "4:2")
+            answer wire queue Complete "Success" (JsonBody queuedReply)
+          fmap fst outcome @?= Right ()
       , testCase "does not guess among several items that are not the whole" $ do
           let album = Candidate {session = Session Albums (Just "s"), item = Item {title = "Tracks", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:5", hint = Just ListItem, inputPrompt = Nothing}}
               client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle Queue) album)
@@ -196,6 +219,15 @@ albumLevel = fromJust . decodeStrictText $
   {"hint":"action_list","item_key":"2:1","subtitle":"The Example Band","title":"1. First Song"},
   {"hint":"action_list","item_key":"2:2","subtitle":"The Example Band","title":"2. Second Song"}],
   "list":{"count":3,"display_offset":null,"level":1,"subtitle":"The Example Band","title":"An Album"},"offset":0}
+  """
+
+-- | What an album found by a search opens on with Roon Server 2.75: a
+-- level that holds only itself (titles changed).
+albumItselfLevel :: Value
+albumItselfLevel = fromJust . decodeStrictText $
+  """
+  {"items":[{"hint":"list","item_key":"5:0","subtitle":"The Example Band","title":"An Album"}],
+  "list":{"count":1,"display_offset":null,"level":1,"subtitle":"The Example Band","title":"An Album"},"offset":0}
   """
 
 twoTracksLevel :: Value

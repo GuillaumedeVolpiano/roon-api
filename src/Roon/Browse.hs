@@ -390,7 +390,8 @@ performTrackAction = performAction
 --
 -- Observed with Roon Server 2.75: an album and a playlist open on a level
 -- whose first item, @Play Album@ or @Play Playlist@, leads to the actions,
--- before the tracks; a playlist also offers @Shuffle@. A key of an earlier
+-- before the tracks; a playlist also offers @Shuffle@. An album found by a
+-- search first opens on a level that holds only itself. A key of an earlier
 -- level is still accepted after the session has gone deeper: Roon goes
 -- back by itself. A key that Roon no longer knows is answered
 -- @InvalidItemKey@ ('UnexpectedReply').
@@ -424,6 +425,9 @@ performAction target actionTitle candidate = case candidate.item.itemKey of
           | otherwise -> case [(title, next) | Item {title, hint = Just ActionList, itemKey = Just next} <- level.items] of
               [(_, next)] -> descend (depth - 1) next
               (title, next) : _ | "Play " `Text.isPrefixOf` title -> descend (depth - 1) next
+              -- An album found by a search opens on a level that holds
+              -- only itself, as a list, before its tracks.
+              [] | [Item {hint = Just ListItem, itemKey = Just next}] <- level.items -> descend (depth - 1) next
               _ -> missing
 
 -- | Perform actions one after the other, in order, and report each one.
