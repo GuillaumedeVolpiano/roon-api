@@ -8,6 +8,9 @@
 -- @http:\/\/host:port\/api\/image\/KEY@, with the size wanted in the query.
 -- No registration and no token are needed.
 --
+-- The request goes through the 'Http' effect of @effectful-streamly-http@:
+-- 'runImageHttp' reaches the server, and tests answer from a function.
+--
 -- Observed with Roon Server 2.75: an unknown key answers 404; an invalid
 -- option answers 400 with a line of text; without options the image comes
 -- in its stored size; @image\/png@ was asked and @image\/jpeg@ came back,
@@ -24,13 +27,14 @@ module Roon.Image
 
     -- * Fetching
   , Image (..)
+  , fetchImage
+
+    -- * Reaching the server
+  , runImageHttp
   , ImageLimits (..)
   , defaultImageLimits
-  , fetchImage
-  , fetchImageWithin
   ) where
 
-import Control.Exception (IOException, try)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -40,14 +44,11 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
 import Effectful
-import Effectful.Error.Static (Error, throwError)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Effectful.HTTP (Http, HttpError (..), HttpFailure, Limits (..), Response (..), Scheme (..))
+import Effectful.HTTP qualified as Http
 import Roon.Effect.WebSocket (ServerAddress (..))
 import Roon.Error (RoonError (..))
-import Streamly.Data.Scanl qualified as Scanl
-import Streamly.Data.Stream qualified as Stream
-import Streamly.External.ByteString qualified as StreamlyBS
-import Streamly.External.Network.HTTP qualified as Http
-import System.Timeout (timeout)
 
 -- | How Roon fits an image into the size asked.
 data Scale
@@ -131,10 +132,26 @@ data Image = Image
   }
   deriving stock (Eq, Show)
 
+-- | Fetch the image of a key from a Roon Server.
+--
+-- Throws 'ImageFailed' when the server refuses (unknown key, invalid
+-- option). What the connection itself can do wrong is up to the
+-- interpreter of 'Http': see 'runImageHttp'.
+fetchImage :: (Http :> es, Error RoonError :> es) => ServerAddress -> Text -> ImageOptions -> Eff es Image
+fetchImage address key options = do
+  response <- Http.fetch Http (Http.get address.host address.port (imageTarget key options))
+  if response.status /= 200
+    then
+      -- Roon explains a refusal in a line of text.
+      throwError . ImageFailed . Text.strip . Text.unwords $
+        [Text.pack (show response.status), decodeUtf8Lenient response.reason, decodeUtf8Lenient (ByteString.take 1024 response.body)]
+    else pure Image {contentType = maybe "" decodeUtf8Lenient (Http.header "content-type" response), bytes = response.body}
+
 -- | The bounds of a fetch.
 data ImageLimits = ImageLimits
   { microseconds :: Int
-  -- ^ For the whole exchange.
+  -- ^ For each wait: for the connection to open, and for the server to go
+  -- on once it is.
   , maxBytes :: Int
   -- ^ For the image.
   }
@@ -144,45 +161,27 @@ data ImageLimits = ImageLimits
 defaultImageLimits :: ImageLimits
 defaultImageLimits = ImageLimits {microseconds = 30_000_000, maxBytes = 32 * 1024 * 1024}
 
--- | Fetch the image of a key from a Roon Server, within
--- 'defaultImageLimits'.
+-- | Reach the Roon Server for its images: in clear, one connection for
+-- each image, within limits.
 --
--- Throws 'ImageFailed' when the server refuses (unknown key, invalid
--- option), answers something that is not HTTP, or sends too large an
--- image; 'ConnectFailed' when the connection fails; 'TimedOut' when the
--- exchange takes too long.
-fetchImage :: (IOE :> es, Error RoonError :> es) => ServerAddress -> Text -> ImageOptions -> Eff es Image
-fetchImage = fetchImageWithin defaultImageLimits
-
--- | Like 'fetchImage', within other limits.
-fetchImageWithin :: (IOE :> es, Error RoonError :> es) => ImageLimits -> ServerAddress -> Text -> ImageOptions -> Eff es Image
-fetchImageWithin limits address key options = do
-  outcome <- liftIO . try . try . timeout limits.microseconds $ Http.withResponse request receive
-  case outcome of
-    Left (problem :: IOException) -> throwError (ConnectFailed (Text.pack (show problem)))
-    Right (Left (problem :: Http.HttpError)) -> throwError (ImageFailed (Text.pack (show problem)))
-    Right (Right Nothing) -> throwError (TimedOut "image")
-    Right (Right (Just (Left refusal))) -> throwError (ImageFailed refusal)
-    Right (Right (Just (Right image))) -> pure image
+-- Throws 'ConnectFailed' when the connection fails, 'TimedOut' when the
+-- server takes too long, and 'ImageFailed' when it answers something that
+-- is not HTTP or sends too large an image.
+runImageHttp :: (IOE :> es, Error RoonError :> es) => ImageLimits -> Eff (Http : es) a -> Eff es a
+runImageHttp limits action =
+  runErrorNoCallStack (Http.runHttpClear bounds (inject action)) >>= either (throwError . failure) pure
   where
-    request = Http.get address.host address.port (imageTarget key options)
-    receive response
-      | response.status /= 200 = do
-          -- Roon explains a refusal in a line of text.
-          (_, explanation) <- collect 1024 response.body
-          pure . Left . Text.strip . Text.unwords $
-            [Text.pack (show response.status), decodeUtf8Lenient response.reason, decodeUtf8Lenient (ByteString.take 1024 explanation)]
-      | otherwise = do
-          (complete, content) <- collect limits.maxBytes response.body
-          pure $
-            if complete
-              then Right Image {contentType = maybe "" decodeUtf8Lenient (Http.header "content-type" response), bytes = content}
-              else Left ("the image is larger than " <> Text.pack (show limits.maxBytes) <> " bytes")
-    -- Read the body until it ends or exceeds a number of bytes: whether it
-    -- ended within the limit, and what was read.
-    collect limit body = do
-      -- Each array with the number of bytes read before it.
-      let counted = Stream.postscanl (Scanl.mkScanl (\(before, previous) array -> (before + ByteString.length previous, array)) (0, "")) (fmap StreamlyBS.fromArray body)
-      chunks <- Stream.toList (fmap snd (Stream.takeWhile (\(before, _) -> before <= limit) counted))
-      let content = ByteString.concat chunks
-      pure (ByteString.length content <= limit, content)
+    bounds =
+      Http.defaultLimits
+        { connectTimeout = Just limits.microseconds
+        , idleTimeout = Just limits.microseconds
+        , maxBodySize = Just limits.maxBytes
+        }
+    failure :: HttpFailure -> RoonError
+    failure = \case
+      Http.ConnectFailed cause -> ConnectFailed cause
+      Http.RequestFailed ConnectTimedOut -> TimedOut "image"
+      Http.RequestFailed ResponseTimedOut -> TimedOut "image"
+      Http.RequestFailed (BodyTooLarge limit) -> ImageFailed ("the image is larger than " <> Text.pack (show limit) <> " bytes")
+      Http.RequestFailed problem -> ImageFailed (Text.pack (show problem))
+      other -> ImageFailed (Text.pack (show other))

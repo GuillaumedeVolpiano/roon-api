@@ -2,6 +2,11 @@
 
 ## 0.1.0.1 -- unreleased
 
+* `Roon.Image` asks for images through the `Http` effect of
+  effectful-streamly-http: `fetchImage` no longer needs `IOE`, and tests
+  answer from a function. `runImageHttp` reaches the server, within
+  `ImageLimits`; `fetchImageWithin` is gone. The time limit now bounds each
+  wait, not the whole exchange.
 * `performAction` plays an album, a playlist or anything else Roon offers
   actions for, not only a track.
 * `roon-probe browse HIERARCHY [TITLE...]` walks the library without

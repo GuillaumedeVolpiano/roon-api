@@ -23,7 +23,7 @@ import Roon.Error (RoonError)
 import Roon.Browse (BrowseResult (..), Hierarchy (..), Item (..), ItemHint (..), List (..), LoadResult (..), Navigation (..), Session (..), browse, load)
 import Roon.Connection (withRoon)
 import Roon.Discovery (Core (..), defaultDiscovery, discover)
-import Roon.Image (Image (..), fetchImage, fitWithin)
+import Roon.Image (Image (..), defaultImageLimits, fetchImage, fitWithin, runImageHttp)
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), ZoneId, getZones)
 import System.Exit (exitFailure)
@@ -124,7 +124,7 @@ explore address hierarchy path = do
 -- it to a file.
 saveImage :: ServerAddress -> String -> FilePath -> Eff Effects Bool
 saveImage address key file = do
-  outcome <- runErrorNoCallStack @RoonError (fetchImage address (Text.pack key) (fitWithin 1000))
+  outcome <- runErrorNoCallStack @RoonError (runImageHttp defaultImageLimits (fetchImage address (Text.pack key) (fitWithin 1000)))
   case outcome of
     Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
     Right image -> do

@@ -8,7 +8,9 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as Char8
 import Effectful (runEff)
+import Data.Text qualified as Text
 import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.HTTP (Request (..), Response (..), runHttpWith)
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketBytes
 import Roon.Effect.WebSocket (ServerAddress (..))
@@ -33,6 +35,14 @@ tests =
           imageTarget "k" ImageOptions {size = Original, format = Just Png} @?= "/api/image/k?format=image/png"
       , testCase "encodes a key that would change the request" $
           imageTarget "a/b?c d\n\233" originalImage @?= "/api/image/a%2Fb%3Fc%20d%0A%C3%A9"
+      , testCase "asks in clear for the target of the key, on the port of the server" $ do
+          let echo scheme request = Response {status = 200, reason = "OK", headers = [("content-type", "image/png")], body = Char8.pack (show scheme <> " " <> request.host <> " " <> show request.port <> " ") <> request.method <> " " <> request.target}
+          outcome <- answered echo (fetchImage ServerAddress {host = "192.0.2.7", port = 9330} "k" (fitWithin 64))
+          outcome @?= Right Image {contentType = "image/png", bytes = "Http 192.0.2.7 9330 GET /api/image/k?scale=fit&width=64&height=64"}
+      , testCase "a refusal answered from a function, with at most 1024 bytes of explanation" $ do
+          let refuse _ _ = Response {status = 400, reason = "Bad Request", headers = [], body = ByteString.replicate 5000 120}
+          outcome <- answered refuse (fetchImage ServerAddress {host = "192.0.2.7", port = 9330} "k" originalImage)
+          outcome @?= Left (ImageFailed ("400 Bad Request " <> Text.replicate 1024 "x"))
       , testCase "fetches an image" $ do
           let jpeg = ByteString.pack (take 70_000 (cycle [255, 216, 255, 224, 0, 16]))
           (request, outcome) <- withServer (ok "image/jpeg" jpeg) $ \address ->
@@ -74,8 +84,10 @@ tests =
             other -> assertFailure ("expected ConnectFailed, got " <> show other)
       ]
   where
-    fetchWithin limits address = runEff (runErrorNoCallStack @RoonError (fetchImageWithin limits address "key" originalImage))
-    fetch address key options = runEff (runErrorNoCallStack @RoonError (fetchImage address key options))
+    fetchWithin limits address = runEff (runErrorNoCallStack @RoonError (runImageHttp limits (fetchImage address "key" originalImage)))
+    fetch address key options = runEff (runErrorNoCallStack @RoonError (runImageHttp defaultImageLimits (fetchImage address key options)))
+    -- The effect answered from a function: what is asked, without a server.
+    answered response = runEff . runErrorNoCallStack @RoonError . runHttpWith (\scheme request -> pure (response scheme request))
     ok contentType content =
       [ "HTTP/1.1 200 OK\r\nContent-Type: " <> contentType <> "\r\nContent-Length: " <> Char8.pack (show (ByteString.length content)) <> "\r\n\r\n"
       , content

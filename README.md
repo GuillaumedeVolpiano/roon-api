@@ -29,6 +29,7 @@ Early work in progress. Nothing here is stable yet.
 
 roon-api depends on
 [effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly),
+[effectful-streamly-http](https://github.com/GuillaumedeVolpiano/effectful-streamly-http),
 [effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets),
 [streamly-http](https://github.com/GuillaumedeVolpiano/streamly-http),
 [streamly-network-udp](https://github.com/GuillaumedeVolpiano/streamly-network-udp)
