@@ -34,8 +34,9 @@ roon-api depends on
 [streamly-network-udp](https://github.com/GuillaumedeVolpiano/streamly-network-udp)
 and, through effectful-websockets,
 [streamly-websockets](https://github.com/GuillaumedeVolpiano/streamly-websockets),
-not yet on Hackage. `cabal.project` picks them up when they are checked out
-next to this repository.
+not yet on Hackage. `cabal.project` fetches them
+from GitHub, at their releases. To build against copies checked out next to
+this repository instead, pass `--project-file=cabal.project.siblings`.
 
 ## Trying it against a server
 

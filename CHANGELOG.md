@@ -1,6 +1,6 @@
 # Revision history for roon-api
 
-## 0.1.0.0 -- unreleased
+## 0.1.0.0 -- 2026-11-21
 
 * MOO message format: types, encoder and parser (`Roon.Moo.Message`).
 * WebSocket transport with ping and pong (`Roon.Effect.WebSocket`), over

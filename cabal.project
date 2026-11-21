@@ -1,9 +1,30 @@
 packages: .
 
--- The libraries split out of roon-api, when they are checked out next to it.
-optional-packages:
-  ../effectful-streamly
-  ../effectful-websockets
-  ../streamly-http
-  ../streamly-network-udp
-  ../streamly-websockets
+-- The libraries this package is built on are not on Hackage yet: they are
+-- fetched from GitHub, each at its release. To build against copies checked
+-- out next to this repository instead, see cabal.project.siblings.
+
+source-repository-package
+  type: git
+  location: https://github.com/GuillaumedeVolpiano/effectful-streamly
+  tag: v0.1.0.0
+
+source-repository-package
+  type: git
+  location: https://github.com/GuillaumedeVolpiano/effectful-websockets
+  tag: v0.1.0.0
+
+source-repository-package
+  type: git
+  location: https://github.com/GuillaumedeVolpiano/streamly-http
+  tag: v0.1.0.0
+
+source-repository-package
+  type: git
+  location: https://github.com/GuillaumedeVolpiano/streamly-network-udp
+  tag: v0.1.0.0
+
+source-repository-package
+  type: git
+  location: https://github.com/GuillaumedeVolpiano/streamly-websockets
+  tag: v0.1.0.0

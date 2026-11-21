@@ -1,0 +1,11 @@
+-- For working on this package and the libraries it is built on at the same
+-- time: cabal build --project-file=cabal.project.siblings
+packages: .
+
+-- The libraries split out of roon-api, when they are checked out next to it.
+optional-packages:
+  ../effectful-streamly
+  ../effectful-websockets
+  ../streamly-http
+  ../streamly-network-udp
+  ../streamly-websockets
