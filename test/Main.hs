@@ -2,6 +2,7 @@ module Main (main) where
 
 import Roon.BrowseSpec qualified as BrowseSpec
 import Roon.ConnectionSpec qualified as ConnectionSpec
+import Roon.DiscoverySpec qualified as DiscoverySpec
 import Roon.Effect.TokenStoreSpec qualified as TokenStoreSpec
 import Roon.Effect.WebSocketSpec qualified as WebSocketSpec
 import Roon.Moo.MessageSpec qualified as MessageSpec
@@ -19,4 +20,5 @@ main =
       , WebSocketSpec.tests
       , TransportSpec.tests
       , BrowseSpec.tests
+      , DiscoverySpec.tests
       ]

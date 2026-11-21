@@ -19,6 +19,7 @@ import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile, saveToken)
 import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket, traceFrames)
 import Roon.Error (RoonError)
+import Roon.Discovery (Core (..), defaultDiscovery, discover)
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), getZones)
 import System.Exit (exitFailure)
@@ -36,11 +37,16 @@ program :: Eff Effects Bool
 program =
   getArgs >>= \case
     [] -> probe localServer
+    ["discover"] -> do
+      cores <- discover defaultDiscovery
+      case cores of
+        [] -> False <$ complain "No Roon Server answered."
+        _ -> True <$ mapM_ (\core -> say (core.uniqueId <> "  " <> maybe "" id core.name <> "  " <> maybe "" id core.displayVersion <> "  " <> Text.pack core.address.host <> ":" <> Text.pack (show core.address.port))) cores
     [host] -> probe localServer {host}
     [host, portText] | Just port <- readMaybe portText -> probe ServerAddress {host, port}
     _ -> do
       name <- getProgName
-      complain ("usage: " <> Text.pack name <> " [HOST [PORT]]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame)")
+      complain ("usage: " <> Text.pack name <> " [HOST [PORT] | discover]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame)")
       pure False
 
 extension :: ExtensionInfo

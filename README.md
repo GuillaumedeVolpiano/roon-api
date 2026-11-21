@@ -17,7 +17,7 @@ Early work in progress. Nothing here is stable yet.
 - [x] MOO message encoding and parsing
 - [x] WebSocket transport with keep-alive
 - [x] Extension registration and token persistence
-- [ ] Server discovery (SOOD)
+- [x] Server discovery (SOOD)
 - [x] Transport service (zones, queue, playback control)
 - [x] Browse service (search, library navigation, play actions)
 
@@ -43,7 +43,8 @@ the zones.
 The first time, it waits until you enable "roon-api probe" in Roon,
 under Settings, Extensions. The token the server hands out is kept in
 `$XDG_STATE_HOME/roon-api/`. With `ROON_TRACE=1`, it describes every
-frame sent and received on stderr.
+frame sent and received on stderr. `roon-probe discover` lists the Roon
+Servers that answer on the local network.
 
 Tested with GHC 9.12.4.
 

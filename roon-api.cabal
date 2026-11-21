@@ -43,6 +43,7 @@ library
   exposed-modules:
     Roon.Browse
     Roon.Connection
+    Roon.Discovery
     Roon.Effect.Moo
     Roon.Effect.TokenStore
     Roon.Effect.WebSocket
@@ -62,6 +63,7 @@ library
     , effectful-streamly   ^>=0.1
     , effectful-websockets ^>=0.1
     , filepath             ^>=1.5
+    , network              ^>=3.2
     , streamly-bytestring  ^>=0.2.3
     , streamly-core        ^>=0.3.3
     , text                 ^>=2.1
@@ -85,6 +87,7 @@ test-suite roon-api-test
   other-modules:
     Roon.BrowseSpec
     Roon.ConnectionSpec
+    Roon.DiscoverySpec
     Roon.Effect.TokenStoreSpec
     Roon.Effect.WebSocketSpec
     Roon.Moo.MessageSpec

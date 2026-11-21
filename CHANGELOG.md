@@ -13,6 +13,8 @@
   (`registerWithin`).
 * Extension registration (`Roon.Registry`) with token persistence
   (`Roon.Effect.TokenStore`).
+* Discovery of Roon Servers on the local network, by SOOD
+  (`Roon.Discovery`).
 * `withRoon` to connect and register in one step, and
   `withRoonReconnecting` to connect again, with a growing delay, when the
   connection is lost or refused (`Roon.Connection`).
@@ -27,4 +29,5 @@
 * Building blocks shared by services, among them the subscription
   convention with its unsubscription (`Roon.Service`).
 * `roon-probe`, a smoke test against a real server; it lists the zones, and
-  describes every frame when `ROON_TRACE` is set.
+  describes every frame when `ROON_TRACE` is set; `roon-probe discover`
+  lists the servers on the network.
