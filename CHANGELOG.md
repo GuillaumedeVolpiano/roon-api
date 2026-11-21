@@ -1,5 +1,9 @@
 # Revision history for roon-api
 
+## 0.1.0.1 -- unreleased
+
+* Built on streamly-http 0.2 and effectful-websockets 0.1.0.1.
+
 ## 0.1.0.0 -- 2026-11-21
 
 * MOO message format: types, encoder and parser (`Roon.Moo.Message`).

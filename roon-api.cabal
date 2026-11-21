@@ -1,6 +1,6 @@
 cabal-version:   3.12
 name:            roon-api
-version:         0.1.0.0
+version:         0.1.0.1
 synopsis:        Client library for the Roon extension API
 description:
   An independent, unofficial Haskell implementation of the protocol that
@@ -67,7 +67,7 @@ library
     , network              ^>=3.2
     , streamly-bytestring  ^>=0.2.3
     , streamly-core        ^>=0.3.3
-    , streamly-http        ^>=0.1
+    , streamly-http        ^>=0.2
     , streamly-network-udp ^>=0.1
     , text                 ^>=2.1
 
