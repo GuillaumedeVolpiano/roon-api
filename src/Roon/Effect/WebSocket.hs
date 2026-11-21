@@ -80,7 +80,12 @@ runWebSocket
   -> Eff (WebSocket : es) a
   -> Eff es a
 runWebSocket address action =
-  runErrorNoCallStack @WebSocketError (runWebSocketClient (clientConfig address.host address.port "/api") (inject action)) >>= \case
+  runErrorNoCallStack @WebSocketError (runWebSocketClient config (inject action)) >>= \case
     Right value -> pure value
     Left (Client.ConnectFailed cause) -> throwError (ConnectFailed cause)
     Left Client.NoPong -> throwError ConnectionLost
+  where
+    -- Roon Server 2.75 never answers the close frame: waiting for it would
+    -- last the whole limit. A short wait still lets Roon read our last
+    -- frames, and us read its own, before the TCP connection goes.
+    config = (clientConfig address.host address.port "/api") {Client.closeTimeout = 100_000}
