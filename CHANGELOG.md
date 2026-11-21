@@ -1,6 +1,6 @@
 # Revision history for roon-api
 
-## 0.1.0.1 -- unreleased
+## 0.2.0.0 -- unreleased
 
 * `Roon.Image` asks for images through the `Http` effect of
   effectful-streamly-http: `fetchImage` no longer needs `IOE`, and tests
