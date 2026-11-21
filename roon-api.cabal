@@ -123,3 +123,29 @@ test-suite roon-api-test
     , tasty             ^>=1.5
     , tasty-hunit       ^>=0.10
     , tasty-quickcheck  ^>=0.11
+
+-- Measures the parsers of the hot paths against other ways to write
+-- them. Not a regression test: run it by hand, with cabal bench.
+benchmark roon-api-bench
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: bench
+  main-is:        Main.hs
+  ghc-options:    -threaded -O2
+  build-depends:
+    , aeson                ^>=2.3
+    , base                 ^>=4.21
+    , bytestring           ^>=0.12
+    , containers           ^>=0.7
+    , deepseq              ^>=1.5
+    , effectful            ^>=2.7
+    , flatparse            ^>=0.5
+    , roon-api
+    , scientific           ^>=0.3
+    , streamly-bytestring  ^>=0.2.3
+    , streamly-core        ^>=0.3.3
+    , streamly-http        ^>=0.2
+    , tasty-bench          >=0.4 && <0.6
+    , tasty-hunit          ^>=0.10
+    , text                 ^>=2.1
+    , vector               ^>=0.13

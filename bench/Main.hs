@@ -1,0 +1,317 @@
+-- | How fast the parsers of the hot paths are, against other ways to
+-- write them: the header block of a MOO message, the head of an HTTP
+-- response, and the JSON body of a list of zones. Measured with
+-- tasty-bench; the checks at the end make sure the ways compared agree.
+--
+-- The zones come from the Roon Server of this machine when it answers.
+module Main (main) where
+
+import Control.Applicative ((<|>))
+import Control.DeepSeq (force)
+import Control.Exception (SomeException, try)
+import Control.Monad (void)
+import Data.Aeson (Value (..))
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither, parseJSON)
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
+import Data.Char (chr, isDigit)
+import Data.Functor.Identity (Identity (..))
+import Data.Map.Strict qualified as Map
+import Data.Scientific (scientific)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text
+import Data.Vector qualified as Vector
+import Data.Word (Word8)
+import Effectful (runEff)
+import Effectful.Concurrent (runConcurrent)
+import Effectful.Error.Static (runErrorNoCallStack)
+import Effectful.FileSystem (runFileSystem)
+import FlatParse.Basic qualified as FP
+import Roon.Connection (withRoon)
+import Roon.Effect.Moo (Reply (..), pingService, request)
+import Roon.Effect.TokenStore (defaultTokenFile, runTokenStoreFile)
+import Roon.Effect.WebSocket (localServer)
+import Roon.Error (RoonError)
+import Roon.Moo.Message (Body (..), MooMessage (..), RequestId (..), Verb (..))
+import Roon.Moo.Message qualified as Moo
+import Roon.Registry (ExtensionInfo (..))
+import Roon.Transport (Zone)
+import Streamly.Data.Fold qualified as Fold
+import Streamly.Data.Parser (Parser)
+import Streamly.Data.Parser qualified as Parser
+import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.StreamK qualified as StreamK
+import Streamly.External.ByteString qualified as StreamlyBS
+import Streamly.External.Network.HTTP.Wire (Response (..), readResponseHeadWithin, responseHead)
+import Test.Tasty.Bench (bench, bgroup, defaultMain, nf, nfIO)
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Text.Printf (printf)
+
+main :: IO ()
+main = do
+  (source, zonesValue) <- zonesBody
+  let zonesJson = BS.toStrict (Aeson.encode zonesValue)
+      frame = Moo.encode MooMessage {verb = Complete, name = "Success", requestId = RequestId "42", headers = Map.empty, body = JsonBody zonesValue}
+      block = BS.take (BS.length (fst (BS.breakSubstring "\n\n" frame)) + 1) frame
+  printf "Zones body: %s, %d bytes. MOO header block: %d bytes. HTTP head: %d bytes.\n\n" source (BS.length zonesJson) (BS.length block) (BS.length httpHead)
+  defaultMain
+    [ bgroup
+        "MOO header block"
+        [ bench "streamly Parser, monadic (as in Roon.Moo.Message)" (nf (run mooMonadic) block)
+        , bench "streamly Parser, applicative" (nf (run mooApplicative) block)
+        , bench "flatparse" (nf (flat mooFlat) block)
+        , bench "ByteString splitting by hand (a floor, not a proposal)" (nf mooByHand block)
+        ]
+    , bgroup
+        "MOO message, whole"
+        [ bench "Roon.Moo.Message.parse" (nf (either (const Nothing) (Just . whole) . Moo.parse) frame)
+        ]
+    , bgroup
+        "HTTP response head"
+        [ bench "streamly-http as it is (parser over arrays, ParserK)" $
+            nfIO (summary . fst <$> readResponseHeadWithin (Just 65536) (StreamK.fromPure (StreamlyBS.toArray httpHead)))
+        , bench "the same parser over a stream of bytes" (nf (fmap summary . run responseHead) httpHead)
+        , bench "flatparse" (nf (flat httpFlat) httpHead)
+        ]
+    , bgroup
+        "JSON body of the zones"
+        [ bench "aeson, to Value" (nf (Aeson.decodeStrict :: ByteString -> Maybe Value) zonesJson)
+        , bench "flatparse, to Value" (nf (flat (jsonFlat <* FP.eof)) zonesJson)
+        , -- Zone has no NFData instance: the zones are shown to force them,
+          -- which adds to these two times alike.
+          bench "aeson, to Value, then FromJSON to [Zone]" (nf (fmap (length . show) . toZones) zonesJson)
+        , bench "FromJSON to [Zone] alone, from a Value" (nf (fmap (length . show) . fromValue) zonesValue)
+        ]
+    , bgroup
+        "the ways compared agree"
+        [ testCase "MOO header block" $
+            assertBool "differ" (all (== run mooMonadic block) [run mooApplicative block, flat mooFlat block, Just (mooByHand block)])
+        , testCase "HTTP head" $
+            fmap summary (run responseHead httpHead) @?= flat httpFlat httpHead
+        , testCase "JSON" $
+            flat (jsonFlat <* FP.eof) zonesJson @?= Aeson.decodeStrict zonesJson
+        ]
+    ]
+  where
+    run :: Parser Word8 Identity a -> ByteString -> Maybe a
+    run parser bytes = either (const Nothing) Just (runIdentity (Stream.parse parser (Stream.unfold StreamlyBS.reader bytes)))
+    flat :: FP.Parser () a -> ByteString -> Maybe a
+    flat parser bytes = case FP.runParser parser bytes of
+      FP.OK found _ -> Just found
+      _ -> Nothing
+    whole message = (message.name, message.headers, case message.body of JsonBody value -> value; _ -> Null)
+    summary response = (response.status, response.reason, response.headers)
+    toZones bytes = Aeson.decodeStrict bytes >>= fromValue
+    fromValue :: Value -> Maybe [Zone]
+    fromValue = \case
+      Object fields | Just zones <- KeyMap.lookup "zones" fields -> either (const Nothing) Just (parseEither parseJSON zones)
+      _ -> Nothing
+
+-- Inputs
+
+-- | The zones of the Roon Server of this machine, or made-up ones when it
+-- cannot be reached.
+zonesBody :: IO (String, Value)
+zonesBody = do
+  tokenFile <- runEff (runFileSystem (defaultTokenFile extension.extensionId))
+  outcome <- try . runEff . runConcurrent . runFileSystem . runErrorNoCallStack @RoonError . runTokenStoreFile tokenFile . withRoon localServer extension $ \_ ->
+    request "com.roonlabs.transport:2/get_zones" NoBody
+  pure $ case outcome of
+    Right (Right Reply {body = JsonBody value}) -> ("from the Roon Server of this machine", force value)
+    Right _ -> ("made up (the server gave no zones)", madeUp)
+    Left (_ :: SomeException) -> ("made up (no server reached)", madeUp)
+  where
+    madeUp = Aeson.object ["zones" Aeson..= ([] :: [Value])]
+    extension =
+      ExtensionInfo
+        { extensionId = "io.github.guillaumedevolpiano.roon-api.probe"
+        , displayName = "roon-api probe"
+        , displayVersion = "bench"
+        , publisher = "roon-api"
+        , email = "nobody@example.invalid"
+        , website = Nothing
+        , requiredServices = ["com.roonlabs.transport:2", "com.roonlabs.browse:1"]
+        , optionalServices = []
+        , providedServices = [pingService]
+        }
+
+-- | The head of an image response, as Roon Server 2.75 sent it.
+httpHead :: ByteString
+httpHead =
+  "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nEtag: 96f45bde867a0aaf6df5ff2f47526aa6916ed3ff:6a8027a650750256c151c53e7ee9017f\r\n\
+  \Accept-Ranges: bytes\r\nCache-Control: max-age=21600, public\r\nContent-Type: image/jpeg\r\nContent-Length: 43183\r\n\r\n"
+
+-- The MOO header block, four ways
+
+-- | As in Roon.Moo.Message.
+mooMonadic :: Parser Word8 Identity (Text, Text, [(Text, Text)])
+mooMonadic = do
+  void (Parser.listEq (BS.unpack "MOO/1 "))
+  verbName <- utf8 (Parser.takeWhile1 isUpperAscii Fold.toList)
+  void (Parser.satisfy (== 32))
+  name <- restOfLine
+  headerList <- Parser.many headerLine Fold.toList
+  Parser.eof
+  pure (verbName, name, headerList)
+  where
+    headerLine = do
+      key <- utf8 (Parser.takeWhile1 (\byte -> byte /= 58 && byte /= 10) Fold.toList)
+      void (Parser.satisfy (== 58))
+      Parser.dropWhile (== 32)
+      value <- restOfLine
+      pure (key, value)
+    restOfLine = utf8 (Parser.takeWhile (/= 10) Fold.toList) <* Parser.satisfy (== 10)
+    utf8 bytesParser = do
+      bytes <- bytesParser
+      case Text.decodeUtf8' (BS.pack bytes) of
+        Left _ -> Parser.die "invalid UTF-8"
+        Right decoded -> pure decoded
+    isUpperAscii byte = byte >= 65 && byte <= 90
+
+-- | The same grammar without any bind: UTF-8 is decoded leniently, since
+-- deciding to fail on a decoded value needs a bind.
+mooApplicative :: Parser Word8 Identity (Text, Text, [(Text, Text)])
+mooApplicative =
+  (,,)
+    <$> (Parser.listEq (BS.unpack "MOO/1 ") *> text (Parser.takeWhile1 isUpperAscii Fold.toList) <* Parser.satisfy (== 32))
+    <*> restOfLine
+    <*> Parser.many headerLine Fold.toList
+    <* Parser.eof
+  where
+    headerLine =
+      (,)
+        <$> (text (Parser.takeWhile1 (\byte -> byte /= 58 && byte /= 10) Fold.toList) <* Parser.satisfy (== 58) <* Parser.dropWhile (== 32))
+        <*> restOfLine
+    restOfLine = text (Parser.takeWhile (/= 10) Fold.toList) <* Parser.satisfy (== 10)
+    text = fmap (Text.decodeUtf8Lenient . BS.pack)
+    isUpperAscii byte = byte >= 65 && byte <= 90
+
+mooFlat :: FP.Parser () (Text, Text, [(Text, Text)])
+mooFlat = do
+  FP.byteString "MOO/1 "
+  verbName <- utf8 (FP.byteStringOf (FP.skipSome (FP.skipSatisfyAscii (\c -> c >= 'A' && c <= 'Z'))))
+  FP.word8 32
+  name <- restOfLine
+  headerList <- FP.many headerLine
+  FP.eof
+  pure (verbName, name, headerList)
+  where
+    headerLine = do
+      key <- utf8 (FP.byteStringOf (FP.skipSome (notByte2 58 10)))
+      FP.word8 58
+      FP.skipMany (FP.word8 32)
+      value <- restOfLine
+      pure (key, value)
+    restOfLine = utf8 (FP.byteStringOf (FP.skipMany (notByte 10))) <* FP.word8 10
+    utf8 parser = parser >>= either (const FP.failed) pure . Text.decodeUtf8'
+
+-- | Any byte but one.
+notByte :: Word8 -> FP.Parser e ()
+notByte excluded = FP.anyWord8 >>= \byte -> if byte == excluded then FP.failed else pure ()
+
+notByte2 :: Word8 -> Word8 -> FP.Parser e ()
+notByte2 one other = FP.anyWord8 >>= \byte -> if byte == one || byte == other then FP.failed else pure ()
+
+-- | What the same block gives when its lines are split by hand: no error
+-- reporting, no check of the grammar.
+mooByHand :: ByteString -> (Text, Text, [(Text, Text)])
+mooByHand block = case BS8.lines block of
+  first : rest ->
+    let (verbName, name) = BS.break (== 32) (BS.drop 6 first)
+     in (Text.decodeUtf8Lenient verbName, Text.decodeUtf8Lenient (BS.drop 1 name), map header rest)
+  [] -> ("", "", [])
+  where
+    header line =
+      let (key, value) = BS.break (== 58) line
+       in (Text.decodeUtf8Lenient key, Text.decodeUtf8Lenient (BS.dropWhile (== 32) (BS.drop 1 value)))
+
+-- The HTTP head
+
+httpFlat :: FP.Parser () (Int, ByteString, [(ByteString, ByteString)])
+httpFlat = do
+  FP.byteString "HTTP/1."
+  FP.skipSatisfyAscii isDigit
+  FP.word8 32
+  status <- FP.anyAsciiDecimalInt
+  reason <- restOfLine
+  found <- FP.many headerLine
+  lineEnd
+  pure (status, reason, found)
+  where
+    headerLine = do
+      name <- FP.byteStringOf (FP.skipSome (FP.skipSatisfyAscii tokenChar))
+      FP.word8 58
+      value <- restOfLine
+      pure (BS8.map lower name, value)
+    restOfLine = do
+      line <- FP.byteStringOf (FP.skipMany (notByte 10))
+      FP.word8 10
+      pure (BS.dropWhile blank (BS.dropWhileEnd blank line))
+    lineEnd = FP.skipMany (FP.word8 13) *> FP.word8 10
+    blank byte = byte == 32 || byte == 9 || byte == 13
+    tokenChar c = c > ' ' && c < '\DEL' && c /= ':'
+    lower c = if c >= 'A' && c <= 'Z' then chr (fromEnum c + 32) else c
+
+-- JSON, to the Value of aeson
+
+jsonFlat :: FP.Parser () Value
+jsonFlat = spaces *> value <* spaces
+  where
+    spaces = FP.skipMany (FP.skipSatisfyAscii (\c -> c == ' ' || c == '\n' || c == '\r' || c == '\t'))
+    value =
+      (String <$> string)
+        <|> (FP.word8 123 *> spaces *> (Object . KeyMap.fromList <$> members) <* FP.word8 125)
+        <|> (FP.word8 91 *> spaces *> (Array . Vector.fromList <$> elements) <* FP.word8 93)
+        <|> (Bool True <$ FP.byteString "true")
+        <|> (Bool False <$ FP.byteString "false")
+        <|> (Null <$ FP.byteString "null")
+        <|> number
+    members = sepByComma ((,) <$> (Key.fromText <$> string) <* spaces <* FP.word8 58 <*> jsonFlat) <|> pure []
+    elements = sepByComma jsonFlat <|> pure []
+    sepByComma item = (:) <$> (item <* spaces) <*> FP.many (FP.word8 44 *> spaces *> item <* spaces)
+    string = do
+      FP.word8 34
+      plain <- FP.byteStringOf (FP.skipMany plainByte)
+      (FP.word8 34 *> decoded plain) <|> (escaped [plain] >>= decoded . BS.concat . reverse)
+    plainByte = FP.anyWord8 >>= \byte -> if byte == 34 || byte == 92 || byte < 32 then FP.failed else pure ()
+    decoded bytes = either (const FP.failed) pure (Text.decodeUtf8' bytes)
+    -- The rest of a string that holds escapes, its pieces in reverse.
+    escaped pieces = do
+      FP.word8 92
+      piece <- escape
+      plain <- FP.byteStringOf (FP.skipMany plainByte)
+      (reverse' (plain : piece : pieces) <$ FP.word8 34) <|> escaped (plain : piece : pieces)
+    reverse' = id
+    escape =
+      FP.anyWord8 >>= \case
+        34 -> pure "\""
+        92 -> pure "\\"
+        47 -> pure "/"
+        98 -> pure "\b"
+        102 -> pure "\f"
+        110 -> pure "\n"
+        114 -> pure "\r"
+        116 -> pure "\t"
+        117 -> do
+          high <- hex4
+          if high >= 0xD800 && high < 0xDC00
+            then do
+              FP.word8 92 *> FP.word8 117
+              low <- hex4
+              pure (Text.encodeUtf8 (Text.singleton (chr (0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)))))
+            else pure (Text.encodeUtf8 (Text.singleton (chr high)))
+        _ -> FP.failed
+    hex4 = FP.isolate 4 FP.anyAsciiHexInt
+    number = do
+      negative <- (True <$ FP.word8 45) <|> pure False
+      whole <- FP.anyAsciiDecimalInteger
+      (fraction, digits) <- (FP.word8 46 *> FP.withByteString FP.anyAsciiDecimalInteger (\n bytes -> pure (n, BS.length bytes))) <|> pure (0, 0)
+      power <- ((FP.word8 101 <|> FP.word8 69) *> signedInt) <|> pure 0
+      let mantissa = whole * 10 ^ digits + fraction
+      pure (Number (scientific (if negative then negate mantissa else mantissa) (power - digits)))
+    signedInt = (FP.word8 45 *> (negate <$> FP.anyAsciiDecimalInt)) <|> (FP.word8 43 *> FP.anyAsciiDecimalInt) <|> FP.anyAsciiDecimalInt
