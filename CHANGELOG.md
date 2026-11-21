@@ -1,6 +1,6 @@
 # Revision history for roon-api
 
-## 0.2.0.1 -- unreleased
+## 0.2.0.1 -- 2026-11-21
 
 * `performAction` plays an album found by a search: such an album first
   opens on a level that holds only itself.
