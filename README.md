@@ -30,7 +30,8 @@ Early work in progress. Nothing here is stable yet.
 roon-api depends on
 [effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly),
 [effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets),
-[streamly-http](https://github.com/GuillaumedeVolpiano/streamly-http)
+[streamly-http](https://github.com/GuillaumedeVolpiano/streamly-http),
+[streamly-network-udp](https://github.com/GuillaumedeVolpiano/streamly-network-udp)
 and, through effectful-websockets,
 [streamly-websockets](https://github.com/GuillaumedeVolpiano/streamly-websockets),
 not yet on Hackage. `cabal.project` picks them up when they are checked out

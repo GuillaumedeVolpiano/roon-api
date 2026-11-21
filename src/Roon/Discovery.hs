@@ -29,8 +29,6 @@ module Roon.Discovery
   , coreFromAnswer
   ) where
 
-import Control.Exception (bracket)
-import Control.Monad (forM_)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
@@ -41,11 +39,12 @@ import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word8)
 import Effectful
-import GHC.Clock (getMonotonicTime, getMonotonicTimeNSec)
+import GHC.Clock (getMonotonicTimeNSec)
 import Network.Socket qualified as Socket
-import Network.Socket.ByteString qualified as SocketBytes
 import Roon.Effect.WebSocket (ServerAddress (..))
-import System.Timeout (timeout)
+import Streamly.Data.Stream qualified as Stream
+import Streamly.External.ByteString qualified as StreamlyBS
+import Streamly.External.Network.UDP qualified as Udp
 import Text.Read (readMaybe)
 
 -- | A SOOD datagram: its type (@Q@ for a query, @R@ for an answer) and its
@@ -166,30 +165,15 @@ defaultDiscovery =
 -- | Query the network for Roon Servers and collect the answers for a
 -- while. Each server is listed once, in the order of its first answer.
 discover :: IOE :> es => DiscoveryOptions -> Eff es [Core]
-discover options = liftIO . bracket open Socket.close $ \socket -> do
-  Socket.setSocketOption socket Socket.Broadcast 1
-  Socket.bind socket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (0, 0, 0, 0)))
+discover options = liftIO . Udp.withSocket (Udp.socketAt Udp.anyAddress) {Udp.broadcast = True} $ \socket -> do
   -- A transaction id of its own for each query: with none, Roon Server
   -- 2.75 answered the first query only.
   transaction <- Text.pack . show <$> getMonotonicTimeNSec
-  let query = encodeSood SoodMessage {kind = 'Q', properties = [("query_service_id", Just roonServiceId), ("_tid", Just transaction)]}
-  forM_ options.targets $ \(host, port) ->
-    SocketBytes.sendTo socket query (Socket.SockAddrInet port host)
-  deadline <- (+ fromIntegral options.wait / 1_000_000) <$> getMonotonicTime
-  nubBy ((==) `on` (.uniqueId)) <$> collect socket deadline
+  let query = StreamlyBS.toArray (encodeSood SoodMessage {kind = 'Q', properties = [("query_service_id", Just roonServiceId), ("_tid", Just transaction)]})
+  Stream.fold (Udp.writeTo socket) (Stream.fromList [(Socket.SockAddrInet port host, query) | (host, port) <- options.targets])
+  nubBy ((==) `on` (.uniqueId)) <$> Stream.toList (Stream.mapMaybe core (Udp.datagramsWithin options.wait socket))
   where
-    open = Socket.socket Socket.AF_INET Socket.Datagram Socket.defaultProtocol
-    collect socket deadline = do
-      now <- getMonotonicTime
-      let remaining = round ((deadline - now) * 1_000_000) :: Int
-      if remaining <= 0
-        then pure []
-        else
-          timeout remaining (SocketBytes.recvFrom socket 65535) >>= \case
-            Nothing -> pure []
-            Just (datagram, sender) -> do
-              let found = decodeSood datagram >>= coreFromAnswer (hostOf sender)
-              maybe id (:) found <$> collect socket deadline
+    core (sender, datagram) = decodeSood (StreamlyBS.fromArray datagram) >>= coreFromAnswer (hostOf sender)
     hostOf = \case
       Socket.SockAddrInet _ host -> let (a, b, c, d) = Socket.hostAddressToTuple host in foldr1 (\x y -> x <> "." <> y) (map show [a, b, c, d])
       other -> show other

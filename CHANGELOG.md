@@ -14,7 +14,7 @@
 * Extension registration (`Roon.Registry`) with token persistence
   (`Roon.Effect.TokenStore`).
 * Discovery of Roon Servers on the local network, by SOOD
-  (`Roon.Discovery`).
+  (`Roon.Discovery`), over `streamly-network-udp`.
 * `withRoon` to connect and register in one step, and
   `withRoonReconnecting` to connect again, with a growing delay, when the
   connection is lost or refused (`Roon.Connection`).
