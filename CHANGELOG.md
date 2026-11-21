@@ -1,5 +1,12 @@
 # Revision history for roon-api
 
+## 0.2.0.2 -- 2026-11-21
+
+* The header block of a MOO message and SOOD datagrams are read with
+  flatparse: a whole message is parsed in about nine microseconds instead
+  of fourteen.
+* `cabal bench` measures the parsers of the hot paths.
+
 ## 0.2.0.1 -- 2026-11-21
 
 * `performAction` plays an album found by a search: such an album first
