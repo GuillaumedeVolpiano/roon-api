@@ -75,6 +75,8 @@ executable roon-probe
   import:         shared
   hs-source-dirs: app
   main-is:        Main.hs
+  other-modules:  Paths_roon_api
+  autogen-modules: Paths_roon_api
   ghc-options:    -threaded
   build-depends:
     , base        ^>=4.21

@@ -7,6 +7,7 @@ import Data.ByteString qualified as ByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (encodeUtf8)
+import Data.Version (showVersion)
 import Effectful
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Console.ByteString (Console, runConsole)
@@ -27,6 +28,7 @@ import Roon.Image (Image (..), defaultImageLimits, fetchImage, fitWithin, runIma
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), ZoneId, getZones)
 import System.Exit (exitFailure)
+import Paths_roon_api (version)
 import Prelude hiding (writeFile)
 import Text.Read (readMaybe)
 
@@ -63,7 +65,7 @@ extension =
   ExtensionInfo
     { extensionId = "io.github.guillaumedevolpiano.roon-api.probe"
     , displayName = "roon-api probe"
-    , displayVersion = "0.1.0.0"
+    , displayVersion = Text.pack (showVersion version)
     , publisher = "roon-api"
     , email = "nobody@example.invalid"
     , website = Just "https://github.com/GuillaumedeVolpiano/roon-api"
