@@ -50,6 +50,8 @@ under Settings, Extensions. The token the server hands out is kept in
 `$XDG_STATE_HOME/roon-api/`. With `ROON_TRACE=1`, it describes every
 frame sent and received on stderr. `roon-probe discover` lists the Roon
 Servers that answer on the local network.
+`roon-probe browse HIERARCHY [TITLE...]` walks the library by the titles of
+its items and prints the level reached, without playing anything.
 `roon-probe image KEY FILE [HOST [PORT]]` writes the image of an image key
 (as found in the traced frames) to a file.
 

@@ -2,6 +2,10 @@
 
 ## 0.1.0.1 -- unreleased
 
+* `performAction` plays an album, a playlist or anything else Roon offers
+  actions for, not only a track.
+* `roon-probe browse HIERARCHY [TITLE...]` walks the library without
+  playing anything.
 * Built on streamly-http 0.2 and effectful-websockets 0.1.0.1.
 
 ## 0.1.0.0 -- 2026-11-21

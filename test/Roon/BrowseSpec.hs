@@ -77,6 +77,33 @@ tests =
             -- the track.
             answer wire queue Complete "Success" (JsonBody queuedReply)
           fmap fst outcome @?= Right ()
+      , testCase "plays an album through the item that plays the whole of it" $ do
+          let album = Candidate {session = Session Albums (Just "s"), item = Item {title = "An Album", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:5", hint = Just ListItem, inputPrompt = Nothing}}
+              client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle AddNext) album)
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            openAlbum <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" openAlbum @?= Just (String "1:5")
+            answer wire openAlbum Complete "Success" listAction
+            tracks <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire tracks Complete "Success" (JsonBody albumLevel)
+            openPlay <- expectRequest wire "com.roonlabs.browse:1/browse"
+            field "item_key" openPlay @?= Just (String "2:0")
+            answer wire openPlay Complete "Success" listAction
+            actions <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire actions Complete "Success" (JsonBody actionLevel)
+            addNext <- expectRequest wire "com.roonlabs.browse:1/browse"
+            (field "item_key" addNext, field "zone_or_output_id" addNext) @?= (Just (String "4:1"), Just (String "zone-1"))
+            answer wire addNext Complete "Success" (JsonBody queuedReply)
+          fmap fst outcome @?= Right ()
+      , testCase "does not guess among several items that are not the whole" $ do
+          let album = Candidate {session = Session Albums (Just "s"), item = Item {title = "Tracks", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:5", hint = Just ListItem, inputPrompt = Nothing}}
+              client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle Queue) album)
+          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+            open <- expectRequest wire "com.roonlabs.browse:1/browse"
+            answer wire open Complete "Success" listAction
+            level <- expectRequest wire "com.roonlabs.browse:1/load"
+            answer wire level Complete "Success" (JsonBody twoTracksLevel)
+          fmap fst outcome @?= Left (BrowseItemMissing "Queue for Tracks")
       , testCase "reports an error message from Roon" $ do
           let client = runMoo defaultRequestHandler (performTrackAction livingRoom (trackActionTitle PlayNow) secondSong)
           (outcome, ()) <- withServer Map.empty client $ \wire -> do
@@ -159,6 +186,24 @@ trackLevel = fromJust . decodeStrictText $
   """
   {"items":[{"hint":"action_list","item_key":"3:0","subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"}],
   "list":{"count":1,"display_offset":null,"level":2,"subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"},"offset":0}
+  """
+
+-- | An album, as Roon Server 2.75 lists it (titles changed).
+albumLevel :: Value
+albumLevel = fromJust . decodeStrictText $
+  """
+  {"items":[{"hint":"action_list","item_key":"2:0","subtitle":null,"title":"Play Album"},
+  {"hint":"action_list","item_key":"2:1","subtitle":"The Example Band","title":"1. First Song"},
+  {"hint":"action_list","item_key":"2:2","subtitle":"The Example Band","title":"2. Second Song"}],
+  "list":{"count":3,"display_offset":null,"level":1,"subtitle":"The Example Band","title":"An Album"},"offset":0}
+  """
+
+twoTracksLevel :: Value
+twoTracksLevel = fromJust . decodeStrictText $
+  """
+  {"items":[{"hint":"action_list","item_key":"2:1","subtitle":"The Example Band","title":"First Song"},
+  {"hint":"action_list","item_key":"2:2","subtitle":"The Example Band","title":"Second Song"}],
+  "list":{"count":2,"display_offset":null,"level":1,"subtitle":"2 Results","title":"Tracks"},"offset":0}
   """
 
 actionLevel :: Value

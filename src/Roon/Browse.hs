@@ -47,6 +47,7 @@ module Roon.Browse
   , TrackAction (..)
   , trackActionTitle
   , performTrackAction
+  , performAction
   , performTrackActions
   ) where
 
@@ -382,13 +383,33 @@ performTrackAction
   -- ^ The title of the action, such as @trackActionTitle Queue@.
   -> Candidate
   -> Eff es ()
-performTrackAction target actionTitle candidate = case candidate.item.itemKey of
+performTrackAction = performAction
+
+-- | Like 'performTrackAction', for anything Roon can play: a track, but
+-- also an album, a playlist, an artist or a radio.
+--
+-- Observed with Roon Server 2.75: an album and a playlist open on a level
+-- whose first item, @Play Album@ or @Play Playlist@, leads to the actions,
+-- before the tracks; a playlist also offers @Shuffle@. A key of an earlier
+-- level is still accepted after the session has gone deeper: Roon goes
+-- back by itself. A key that Roon no longer knows is answered
+-- @InvalidItemKey@ ('UnexpectedReply').
+performAction
+  :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es)
+  => target
+  -> Text
+  -- ^ The title of the action, such as @trackActionTitle Queue@.
+  -> Candidate
+  -> Eff es ()
+performAction target actionTitle candidate = case candidate.item.itemKey of
   Nothing -> throwError (BrowseItemMissing ("no key for " <> candidate.item.title))
   Just key -> descend (4 :: Int) key
   where
     current = candidate.session
+    missing = throwError (BrowseItemMissing (actionTitle <> " for " <> candidate.item.title))
     -- A track opens on a level that holds only itself, then on its
-    -- actions; the depth bounds the descent.
+    -- actions; an album or a playlist on a level that starts with the item
+    -- that plays the whole of it. The depth bounds the descent.
     descend 0 _ = throwError (BrowseItemMissing ("no action list for " <> candidate.item.title))
     descend depth key = do
       _ <- browse current (Just target) (Select key)
@@ -398,9 +419,12 @@ performTrackAction target actionTitle candidate = case candidate.item.itemKey of
           browse current (Just target) (Select actionKey) >>= \case
             BrowseMessage message True -> throwError (BrowseFailed message)
             _ -> pure ()
-        [] -> case [next | Item {hint = Just ActionList, itemKey = Just next} <- level.items] of
-          [next] | level.list.hint /= Just ActionListHint -> descend (depth - 1) next
-          _ -> throwError (BrowseItemMissing (actionTitle <> " for " <> candidate.item.title))
+        []
+          | level.list.hint == Just ActionListHint -> missing
+          | otherwise -> case [(title, next) | Item {title, hint = Just ActionList, itemKey = Just next} <- level.items] of
+              [(_, next)] -> descend (depth - 1) next
+              (title, next) : _ | "Play " `Text.isPrefixOf` title -> descend (depth - 1) next
+              _ -> missing
 
 -- | Perform actions one after the other, in order, and report each one.
 -- A failure does not stop the next ones.
