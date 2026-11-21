@@ -2,24 +2,23 @@
 -- the loopback interface.
 module Roon.Effect.WebSocketSpec (tests) where
 
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race_, wait, withAsync)
 import Control.Concurrent.STM (atomically, readTQueue, writeTQueue)
 import Control.Exception (bracket)
-import Control.Monad (forever)
-import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Aeson (Value (..), object, (.=))
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
-import Streamly.Data.Stream qualified as Stream
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding (encodeUtf8)
 import Effectful
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Network.Socket qualified as Socket
-import Network.WebSockets qualified as WS
+import Streamly.Data.Fold qualified as Fold
+import Streamly.Data.Stream qualified as Stream
+import Streamly.External.Network.WebSocket.Server qualified as Server
 import Roon.Connection (Reconnect (..), withRoon, withRoonReconnecting)
 import Roon.Effect.Moo (Reply (..), request)
 import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
@@ -123,31 +122,28 @@ withLoopbackServer
   -> IO (Either RoonError (a, Map Text Text), b)
 withLoopbackServer tokens client script = do
   wire <- newWire
-  port <- freePort
-  withAsync (WS.runServer "127.0.0.1" port (bridge wire)) $ \_ ->
-    withAsync (script wire) $ \scriptThread -> do
-      outcome <- connect (50 :: Int) ServerAddress {host = "127.0.0.1", port}
-      result <- wait scriptThread
-      pure (outcome, result)
-  where
-    -- The server may not be listening yet: retry refused connections.
-    connect attempts address =
-      runClient tokens (client address) >>= \case
-        Left (ConnectFailed _) | attempts > 0 -> threadDelay 20_000 >> connect (attempts - 1) address
-        outcome -> pure outcome
+  bracket (Server.listen "127.0.0.1" 0) Socket.close $ \listener -> do
+    port <- fromIntegral <$> Socket.socketPort listener
+    withAsync (Server.serveSocket listener Server.defaultServerOptions (const (bridge wire))) $ \_ ->
+      withAsync (script wire) $ \scriptThread -> do
+        outcome <- runClient tokens (client ServerAddress {host = "127.0.0.1", port})
+        result <- wait scriptThread
+        pure (outcome, result)
 
 -- | Serve one connection by moving frames between it and the wire.
-bridge :: Wire -> WS.ServerApp
-bridge wire pending = do
-  connection <- WS.acceptRequest pending
+bridge :: Wire -> Server.Connection -> IO ()
+bridge wire connection =
   race_
-    (forever (WS.receiveData connection >>= atomically . writeTQueue wire.toServer))
-    (forward connection)
+    (Stream.fold (Fold.drainMapM (atomically . writeTQueue wire.toServer . bytesOf)) (Server.messages connection))
+    forward
   where
-    forward connection =
+    bytesOf = \case
+      Server.BinaryMessage bytes -> bytes
+      Server.TextMessage text -> encodeUtf8 text
+    forward =
       atomically (readTQueue wire.toClient) >>= \case
-        Just frame -> WS.sendBinaryData connection frame >> forward connection
-        Nothing -> WS.sendClose connection ("" :: ByteString)
+        Just frame -> Server.send connection (Server.BinaryMessage frame) >> forward
+        Nothing -> Server.close connection
 
 -- | A port that was free a moment ago.
 freePort :: IO Int
