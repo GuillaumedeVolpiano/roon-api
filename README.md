@@ -20,6 +20,7 @@ Early work in progress. Nothing here is stable yet.
 - [x] Server discovery (SOOD)
 - [x] Transport service (zones, queue, playback control)
 - [x] Browse service (search, library navigation, play actions)
+- [x] Images (over HTTP)
 
 ## Building
 
@@ -27,9 +28,10 @@ Early work in progress. Nothing here is stable yet.
     cabal test
 
 roon-api depends on
-[effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly)
+[effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly),
+[effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets)
 and
-[effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets),
+[streamly-http](https://github.com/GuillaumedeVolpiano/streamly-http),
 not yet on Hackage. `cabal.project` picks them up when they are checked out
 next to this repository.
 
@@ -45,6 +47,8 @@ under Settings, Extensions. The token the server hands out is kept in
 `$XDG_STATE_HOME/roon-api/`. With `ROON_TRACE=1`, it describes every
 frame sent and received on stderr. `roon-probe discover` lists the Roon
 Servers that answer on the local network.
+`roon-probe image KEY FILE [HOST [PORT]]` writes the image of an image key
+(as found in the traced frames) to a file.
 
 Tested with GHC 9.12.4.
 

@@ -5,6 +5,7 @@ import Roon.ConnectionSpec qualified as ConnectionSpec
 import Roon.DiscoverySpec qualified as DiscoverySpec
 import Roon.Effect.TokenStoreSpec qualified as TokenStoreSpec
 import Roon.Effect.WebSocketSpec qualified as WebSocketSpec
+import Roon.ImageSpec qualified as ImageSpec
 import Roon.Moo.MessageSpec qualified as MessageSpec
 import Roon.TransportSpec qualified as TransportSpec
 import Test.Tasty (defaultMain, testGroup)
@@ -21,4 +22,5 @@ main =
       , TransportSpec.tests
       , BrowseSpec.tests
       , DiscoverySpec.tests
+      , ImageSpec.tests
       ]

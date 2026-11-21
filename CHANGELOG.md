@@ -26,8 +26,10 @@
 * Browse service (`Roon.Browse`): browsing and loading in sessions of
   their own, track searches run concurrently with a report for each query,
   and the actions on a track (Play Now, Add Next, Queue, Start Radio).
+* Images fetched over HTTP by their key, in a size and a format asked for,
+  within limits of time and size (`Roon.Image`), over `streamly-http`.
 * Building blocks shared by services, among them the subscription
   convention with its unsubscription (`Roon.Service`).
 * `roon-probe`, a smoke test against a real server; it lists the zones, and
   describes every frame when `ROON_TRACE` is set; `roon-probe discover`
-  lists the servers on the network.
+  lists the servers on the network; `roon-probe image` saves an image.

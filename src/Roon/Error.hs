@@ -30,4 +30,7 @@ data RoonError
   | -- | An item expected while browsing, such as an action, is not there.
     -- Carries what was looked for.
     BrowseItemMissing Text
+  | -- | An image could not be fetched: the server refused, answered
+    -- something unexpected, or sent too large an image. Carries the reason.
+    ImageFailed Text
   deriving stock (Eq, Show)

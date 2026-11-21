@@ -3,6 +3,7 @@
 -- library against a real server.
 module Main (main) where
 
+import Data.ByteString qualified as ByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (encodeUtf8)
@@ -14,15 +15,17 @@ import Effectful.Environment (Environment, getArgs, getProgName, lookupEnv, runE
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.FileSystem.IO (stderr)
-import Effectful.FileSystem.IO.ByteString (hPutStrLn)
+import Effectful.FileSystem.IO.ByteString (hPutStrLn, writeFile)
 import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile, saveToken)
 import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket, traceFrames)
 import Roon.Error (RoonError)
 import Roon.Discovery (Core (..), defaultDiscovery, discover)
+import Roon.Image (Image (..), fetchImage, fitWithin)
 import Roon.Registry
 import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), getZones)
 import System.Exit (exitFailure)
+import Prelude hiding (writeFile)
 import Text.Read (readMaybe)
 
 main :: IO ()
@@ -42,11 +45,14 @@ program =
       case cores of
         [] -> False <$ complain "No Roon Server answered."
         _ -> True <$ mapM_ (\core -> say (core.uniqueId <> "  " <> maybe "" id core.name <> "  " <> maybe "" id core.displayVersion <> "  " <> Text.pack core.address.host <> ":" <> Text.pack (show core.address.port))) cores
+    ["image", key, file] -> saveImage localServer key file
+    ["image", key, file, host] -> saveImage localServer {host} key file
+    ["image", key, file, host, portText] | Just port <- readMaybe portText -> saveImage ServerAddress {host, port} key file
     [host] -> probe localServer {host}
     [host, portText] | Just port <- readMaybe portText -> probe ServerAddress {host, port}
     _ -> do
       name <- getProgName
-      complain ("usage: " <> Text.pack name <> " [HOST [PORT] | discover]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame)")
+      complain ("usage: " <> Text.pack name <> " [HOST [PORT] | discover | image KEY FILE [HOST [PORT]]]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame)")
       pure False
 
 extension :: ExtensionInfo
@@ -62,6 +68,18 @@ extension =
     , optionalServices = []
     , providedServices = [pingService]
     }
+
+-- | Fetch the image of a key, at most 1000 pixels wide and high, and write
+-- it to a file.
+saveImage :: ServerAddress -> String -> FilePath -> Eff Effects Bool
+saveImage address key file = do
+  outcome <- runErrorNoCallStack @RoonError (fetchImage address (Text.pack key) (fitWithin 1000))
+  case outcome of
+    Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
+    Right image -> do
+      writeFile file image.bytes
+      say (Text.pack file <> ": " <> image.contentType <> ", " <> Text.pack (show (ByteString.length image.bytes)) <> " bytes")
+      pure True
 
 probe :: ServerAddress -> Eff Effects Bool
 probe address = do

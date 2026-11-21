@@ -48,6 +48,7 @@ library
     Roon.Effect.TokenStore
     Roon.Effect.WebSocket
     Roon.Error
+    Roon.Image
     Roon.Moo.Message
     Roon.Registry
     Roon.Service
@@ -66,6 +67,7 @@ library
     , network              ^>=3.2
     , streamly-bytestring  ^>=0.2.3
     , streamly-core        ^>=0.3.3
+    , streamly-http        ^>=0.1
     , text                 ^>=2.1
 
 executable roon-probe
@@ -74,10 +76,11 @@ executable roon-probe
   main-is:        Main.hs
   ghc-options:    -threaded
   build-depends:
-    , base       ^>=4.21
-    , effectful  ^>=2.7
+    , base        ^>=4.21
+    , bytestring  ^>=0.12
+    , effectful   ^>=2.7
     , roon-api
-    , text       ^>=2.1
+    , text        ^>=2.1
 
 test-suite roon-api-test
   import:         shared
@@ -90,6 +93,7 @@ test-suite roon-api-test
     Roon.DiscoverySpec
     Roon.Effect.TokenStoreSpec
     Roon.Effect.WebSocketSpec
+    Roon.ImageSpec
     Roon.Moo.MessageSpec
     Roon.Test.Server
     Roon.TransportSpec
