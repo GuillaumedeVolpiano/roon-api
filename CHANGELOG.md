@@ -1,5 +1,16 @@
 # Revision history for roon-api
 
+## 0.2.0.3 -- 2026-11-27
+
+* Builds with GHC 9.8 and 9.10 as well as 9.12: the language is GHC2021
+  with the extensions GHC2024 adds, and the bounds on `base` and on the
+  libraries that come with the compiler are wider.
+* The fixtures of the tests are ordinary strings, and the benchmark takes
+  `foldl'` from `Data.List`, for the same compilers.
+* Every exported name is documented.
+* The links of the documentation say which name they mean, where a type
+  and its constructor, or two modules, share one.
+
 ## 0.2.0.2 -- 2026-11-21
 
 * The header block of a MOO message and SOOD datagrams are read with
