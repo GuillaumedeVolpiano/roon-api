@@ -20,6 +20,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.Char (chr, isDigit)
 import Data.Functor.Identity (Identity (..))
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Scientific (scientific)
 import Data.Text (Text)
@@ -247,7 +248,7 @@ streamlyHead = do
   found <- Parser.many headerLine Fold.toList
   Parser.dropWhile (== 13)
   void (Parser.satisfy (== 10))
-  pure (foldl' (\total byte -> total * 10 + fromIntegral (byte - 48)) 0 digits, reason, found)
+  pure (List.foldl' (\total byte -> total * 10 + fromIntegral (byte - 48)) 0 digits, reason, found)
   where
     headerLine = do
       name <- Parser.takeWhile1 (\byte -> byte > 32 && byte < 127 && byte /= 58) Fold.toList
