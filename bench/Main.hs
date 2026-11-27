@@ -22,6 +22,7 @@ import Data.ByteString qualified as BS (break, concat, drop, dropWhile, length,
 import Data.ByteString.Char8 qualified as BS8 (lines, map)
 import Data.Char (chr, isDigit)
 import Data.Functor.Identity (Identity (..))
+import Data.List qualified as L (foldl')
 import Data.Map.Strict (empty)
 import Data.Scientific (scientific)
 import Data.Text (Text, singleton)
@@ -256,7 +257,7 @@ streamlyHead = do
   found <- P.many headerLine toList
   P.dropWhile (== 13)
   void (satisfy (== 10))
-  pure (foldl' (\total byte -> total * 10 + fromIntegral (byte - 48)) 0 digits, reason, found)
+  pure (L.foldl' (\total byte -> total * 10 + fromIntegral (byte - 48)) 0 digits, reason, found)
   where
     headerLine = do
       name <- takeWhile1 (\byte -> byte > 32 && byte < 127 && byte /= 58) toList

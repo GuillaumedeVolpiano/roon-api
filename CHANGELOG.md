@@ -1,5 +1,10 @@
 # Revision history for roon-api
 
+## 0.2.0.5 -- 2026-11-27
+
+* The benchmark takes `foldl'` from `Data.List` again: 0.2.0.4 had lost
+  that import, and the benchmark no longer built with GHC 9.8.
+
 ## 0.2.0.4 -- 2026-11-27
 
 * No change of interface. The dependency bounds are stated once in the

@@ -1,6 +1,6 @@
 cabal-version:   3.12
 name:            roon-api
-version:         0.2.0.4
+version:         0.2.0.5
 synopsis:        Client library for the Roon extension API
 description:
   An independent, unofficial Haskell implementation of the protocol that
