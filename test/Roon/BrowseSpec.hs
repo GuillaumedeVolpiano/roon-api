@@ -1,5 +1,3 @@
-{-# LANGUAGE MultilineStrings #-}
-
 -- | The browse service, against a scripted server. The load fixtures are
 -- answers of a real Roon Server 2.75 to a search, without image keys.
 module Roon.BrowseSpec (tests) where
@@ -191,64 +189,48 @@ listAction =
 
 searchLevel :: Value
 searchLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action_list","item_key":"1:0","subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"},
-  {"hint":"list","item_key":"1:1","subtitle":"1 Result","title":"Tracks"}],
-  "list":{"count":2,"display_offset":null,"level":0,"subtitle":"The Example Band Second Song","title":"Search"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action_list\",\"item_key\":\"1:0\",\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"},\
+  \{\"hint\":\"list\",\"item_key\":\"1:1\",\"subtitle\":\"1 Result\",\"title\":\"Tracks\"}],\
+  \\"list\":{\"count\":2,\"display_offset\":null,\"level\":0,\"subtitle\":\"The Example Band Second Song\",\"title\":\"Search\"},\"offset\":0}"
 
 tracksLevel :: Value
 tracksLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action_list","item_key":"2:0","subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"}],
-  "list":{"count":1,"display_offset":null,"level":1,"subtitle":"1 Result","title":"Tracks"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action_list\",\"item_key\":\"2:0\",\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"}],\
+  \\"list\":{\"count\":1,\"display_offset\":null,\"level\":1,\"subtitle\":\"1 Result\",\"title\":\"Tracks\"},\"offset\":0}"
 
 trackLevel :: Value
 trackLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action_list","item_key":"3:0","subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"}],
-  "list":{"count":1,"display_offset":null,"level":2,"subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action_list\",\"item_key\":\"3:0\",\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"}],\
+  \\"list\":{\"count\":1,\"display_offset\":null,\"level\":2,\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"},\"offset\":0}"
 
 -- | An album, as Roon Server 2.75 lists it (titles changed).
 albumLevel :: Value
 albumLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action_list","item_key":"2:0","subtitle":null,"title":"Play Album"},
-  {"hint":"action_list","item_key":"2:1","subtitle":"The Example Band","title":"1. First Song"},
-  {"hint":"action_list","item_key":"2:2","subtitle":"The Example Band","title":"2. Second Song"}],
-  "list":{"count":3,"display_offset":null,"level":1,"subtitle":"The Example Band","title":"An Album"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action_list\",\"item_key\":\"2:0\",\"subtitle\":null,\"title\":\"Play Album\"},\
+  \{\"hint\":\"action_list\",\"item_key\":\"2:1\",\"subtitle\":\"The Example Band\",\"title\":\"1. First Song\"},\
+  \{\"hint\":\"action_list\",\"item_key\":\"2:2\",\"subtitle\":\"The Example Band\",\"title\":\"2. Second Song\"}],\
+  \\"list\":{\"count\":3,\"display_offset\":null,\"level\":1,\"subtitle\":\"The Example Band\",\"title\":\"An Album\"},\"offset\":0}"
 
 -- | What an album found by a search opens on with Roon Server 2.75: a
 -- level that holds only itself (titles changed).
 albumItselfLevel :: Value
 albumItselfLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"list","item_key":"5:0","subtitle":"The Example Band","title":"An Album"}],
-  "list":{"count":1,"display_offset":null,"level":1,"subtitle":"The Example Band","title":"An Album"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"list\",\"item_key\":\"5:0\",\"subtitle\":\"The Example Band\",\"title\":\"An Album\"}],\
+  \\"list\":{\"count\":1,\"display_offset\":null,\"level\":1,\"subtitle\":\"The Example Band\",\"title\":\"An Album\"},\"offset\":0}"
 
 twoTracksLevel :: Value
 twoTracksLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action_list","item_key":"2:1","subtitle":"The Example Band","title":"First Song"},
-  {"hint":"action_list","item_key":"2:2","subtitle":"The Example Band","title":"Second Song"}],
-  "list":{"count":2,"display_offset":null,"level":1,"subtitle":"2 Results","title":"Tracks"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action_list\",\"item_key\":\"2:1\",\"subtitle\":\"The Example Band\",\"title\":\"First Song\"},\
+  \{\"hint\":\"action_list\",\"item_key\":\"2:2\",\"subtitle\":\"The Example Band\",\"title\":\"Second Song\"}],\
+  \\"list\":{\"count\":2,\"display_offset\":null,\"level\":1,\"subtitle\":\"2 Results\",\"title\":\"Tracks\"},\"offset\":0}"
 
 actionLevel :: Value
 actionLevel = fromJust . decodeStrictText $
-  """
-  {"items":[{"hint":"action","item_key":"4:0","subtitle":null,"title":"Play Now"},{"hint":"action","item_key":"4:1","subtitle":null,"title":"Add Next"},
-  {"hint":"action","item_key":"4:2","subtitle":null,"title":"Queue"},{"hint":"action","item_key":"4:3","subtitle":null,"title":"Start Radio"}],
-  "list":{"count":4,"display_offset":null,"hint":"action_list","level":3,"subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"},"offset":0}
-  """
+  "{\"items\":[{\"hint\":\"action\",\"item_key\":\"4:0\",\"subtitle\":null,\"title\":\"Play Now\"},{\"hint\":\"action\",\"item_key\":\"4:1\",\"subtitle\":null,\"title\":\"Add Next\"},\
+  \{\"hint\":\"action\",\"item_key\":\"4:2\",\"subtitle\":null,\"title\":\"Queue\"},{\"hint\":\"action\",\"item_key\":\"4:3\",\"subtitle\":null,\"title\":\"Start Radio\"}],\
+  \\"list\":{\"count\":4,\"display_offset\":null,\"hint\":\"action_list\",\"level\":3,\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"},\"offset\":0}"
 
 queuedReply :: Value
 queuedReply = fromJust . decodeStrictText $
-  """
-  {"action":"list","list":{"count":1,"display_offset":null,"image_key":"album-image-0001","level":2,
-  "subtitle":"The Example Band, Ann Writer, Bob Writer","title":"Second Song"}}
-  """
+  "{\"action\":\"list\",\"list\":{\"count\":1,\"display_offset\":null,\"image_key\":\"album-image-0001\",\"level\":2,\
+  \\"subtitle\":\"The Example Band, Ann Writer, Bob Writer\",\"title\":\"Second Song\"}}"

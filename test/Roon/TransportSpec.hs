@@ -1,4 +1,3 @@
-{-# LANGUAGE MultilineStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
 -- | The transport service, against a scripted server. The zone and output
@@ -169,64 +168,54 @@ zoneScript =
 
 realZones :: Value
 realZones = fromJust . decodeStrictText $
-  """
-  {"zones":[{"display_name":"Living Room","is_next_allowed":true,"is_pause_allowed":false,"is_play_allowed":true,
-  "is_previous_allowed":true,"is_seek_allowed":true,"now_playing":{"artist_image_keys":["artist-image-0001"],
-  "image_key":"album-image-0001","length":306,"one_line":{"line1":"First Song - The Example Band"},
-  "seek_position":82,"three_line":{"line1":"First Song","line2":"The Example Band","line3":"Example Album"},
-  "two_line":{"line1":"First Song","line2":"The Example Band"}},
-  "outputs":[{"can_group_with_output_ids":["output-0001"],"display_name":"Living Room",
-  "output_id":"output-0001",
-  "source_controls":[{"control_key":"1","display_name":"Amplifier","status":"indeterminate","supports_standby":false}],
-  "zone_id":"zone-0001"}],
-  "queue_items_remaining":11,"queue_time_remaining":2170,
-  "settings":{"auto_radio":true,"loop":"disabled","shuffle":false},"state":"paused","zone_id":"zone-0001"}]}
-  """
+  "{\"zones\":[{\"display_name\":\"Living Room\",\"is_next_allowed\":true,\"is_pause_allowed\":false,\"is_play_allowed\":true,\
+  \\"is_previous_allowed\":true,\"is_seek_allowed\":true,\"now_playing\":{\"artist_image_keys\":[\"artist-image-0001\"],\
+  \\"image_key\":\"album-image-0001\",\"length\":306,\"one_line\":{\"line1\":\"First Song - The Example Band\"},\
+  \\"seek_position\":82,\"three_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\
+  \\"two_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\"}},\
+  \\"outputs\":[{\"can_group_with_output_ids\":[\"output-0001\"],\"display_name\":\"Living Room\",\
+  \\"output_id\":\"output-0001\",\
+  \\"source_controls\":[{\"control_key\":\"1\",\"display_name\":\"Amplifier\",\"status\":\"indeterminate\",\"supports_standby\":false}],\
+  \\"zone_id\":\"zone-0001\"}],\
+  \\"queue_items_remaining\":11,\"queue_time_remaining\":2170,\
+  \\"settings\":{\"auto_radio\":true,\"loop\":\"disabled\",\"shuffle\":false},\"state\":\"paused\",\"zone_id\":\"zone-0001\"}]}"
 
 realOutputText :: Text
 realOutputText =
-  """
-  {"can_group_with_output_ids":["output-0001"],"display_name":"Living Room",
-  "output_id":"output-0001",
-  "source_controls":[{"control_key":"1","display_name":"Amplifier","status":"indeterminate","supports_standby":false}],
-  "zone_id":"zone-0001"}
-  """
+  "{\"can_group_with_output_ids\":[\"output-0001\"],\"display_name\":\"Living Room\",\
+  \\"output_id\":\"output-0001\",\
+  \\"source_controls\":[{\"control_key\":\"1\",\"display_name\":\"Amplifier\",\"status\":\"indeterminate\",\"supports_standby\":false}],\
+  \\"zone_id\":\"zone-0001\"}"
 
 realOutput :: Value
 realOutput = fromJust (decodeStrictText realOutputText)
 
 realQueue :: Value
 realQueue = fromJust . decodeStrictText $
-  """
-  {"items":[{"image_key":"album-image-0001","length":306,"one_line":{"line1":"First Song - The Example Band"},
-  "queue_item_id":1001,"three_line":{"line1":"First Song","line2":"The Example Band","line3":"Example Album"},
-  "two_line":{"line1":"First Song","line2":"The Example Band"}},
-  {"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},
-  "queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},
-  "two_line":{"line1":"Second Song","line2":"The Example Band"}}]}
-  """
+  "{\"items\":[{\"image_key\":\"album-image-0001\",\"length\":306,\"one_line\":{\"line1\":\"First Song - The Example Band\"},\
+  \\"queue_item_id\":1001,\"three_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\
+  \\"two_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\"}},\
+  \{\"image_key\":\"album-image-0001\",\"length\":159,\"one_line\":{\"line1\":\"Second Song - The Example Band\"},\
+  \\"queue_item_id\":1002,\"three_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\
+  \\"two_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\"}}]}"
 
 -- | A queue of five items, as Roon reported it while Living Room played.
 capturedQueue :: Value
 capturedQueue = fromJust . decodeStrictText $
-  """
-  {"items":[{"image_key":"album-image-0001","length":306,"one_line":{"line1":"First Song - The Example Band"},"queue_item_id":1001,"three_line":{"line1":"First Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"First Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},"queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Second Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":179,"one_line":{"line1":"Third Song - The Example Band"},"queue_item_id":1003,"three_line":{"line1":"Third Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Third Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":242,"one_line":{"line1":"Fourth Song - The Example Band"},"queue_item_id":1004,"three_line":{"line1":"Fourth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fourth Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":137,"one_line":{"line1":"Fifth Song - The Example Band"},"queue_item_id":1005,"three_line":{"line1":"Fifth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fifth Song","line2":"The Example Band"}}]}
-  """
+  "{\"items\":[{\"image_key\":\"album-image-0001\",\"length\":306,\"one_line\":{\"line1\":\"First Song - The Example Band\"},\"queue_item_id\":1001,\"three_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"First Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":159,\"one_line\":{\"line1\":\"Second Song - The Example Band\"},\"queue_item_id\":1002,\"three_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":179,\"one_line\":{\"line1\":\"Third Song - The Example Band\"},\"queue_item_id\":1003,\"three_line\":{\"line1\":\"Third Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Third Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":242,\"one_line\":{\"line1\":\"Fourth Song - The Example Band\"},\"queue_item_id\":1004,\"three_line\":{\"line1\":\"Fourth Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Fourth Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":137,\"one_line\":{\"line1\":\"Fifth Song - The Example Band\"},\"queue_item_id\":1005,\"three_line\":{\"line1\":\"Fifth Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Fifth Song\",\"line2\":\"The Example Band\"}}]}"
 
 -- | What Roon sent for that queue when the first track ended.
 capturedQueueChange :: Value
 capturedQueueChange = fromJust . decodeStrictText $
-  """
-  {"changes":[{"count":5,"index":0,"operation":"remove"},{"index":0,"items":[{"image_key":"album-image-0001","length":159,"one_line":{"line1":"Second Song - The Example Band"},"queue_item_id":1002,"three_line":{"line1":"Second Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Second Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":179,"one_line":{"line1":"Third Song - The Example Band"},"queue_item_id":1003,"three_line":{"line1":"Third Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Third Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":242,"one_line":{"line1":"Fourth Song - The Example Band"},"queue_item_id":1004,"three_line":{"line1":"Fourth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fourth Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":137,"one_line":{"line1":"Fifth Song - The Example Band"},"queue_item_id":1005,"three_line":{"line1":"Fifth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Fifth Song","line2":"The Example Band"}},
-    {"image_key":"album-image-0001","length":181,"one_line":{"line1":"Sixth Song - The Example Band"},"queue_item_id":1006,"three_line":{"line1":"Sixth Song","line2":"The Example Band","line3":"Example Album"},"two_line":{"line1":"Sixth Song","line2":"The Example Band"}}],"operation":"insert"}]}
-  """
+  "{\"changes\":[{\"count\":5,\"index\":0,\"operation\":\"remove\"},{\"index\":0,\"items\":[{\"image_key\":\"album-image-0001\",\"length\":159,\"one_line\":{\"line1\":\"Second Song - The Example Band\"},\"queue_item_id\":1002,\"three_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Second Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":179,\"one_line\":{\"line1\":\"Third Song - The Example Band\"},\"queue_item_id\":1003,\"three_line\":{\"line1\":\"Third Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Third Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":242,\"one_line\":{\"line1\":\"Fourth Song - The Example Band\"},\"queue_item_id\":1004,\"three_line\":{\"line1\":\"Fourth Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Fourth Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":137,\"one_line\":{\"line1\":\"Fifth Song - The Example Band\"},\"queue_item_id\":1005,\"three_line\":{\"line1\":\"Fifth Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Fifth Song\",\"line2\":\"The Example Band\"}},\
+  \  {\"image_key\":\"album-image-0001\",\"length\":181,\"one_line\":{\"line1\":\"Sixth Song - The Example Band\"},\"queue_item_id\":1006,\"three_line\":{\"line1\":\"Sixth Song\",\"line2\":\"The Example Band\",\"line3\":\"Example Album\"},\"two_line\":{\"line1\":\"Sixth Song\",\"line2\":\"The Example Band\"}}],\"operation\":\"insert\"}]}"
 
 livingRoom :: Zone
 livingRoom =
