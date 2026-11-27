@@ -8,7 +8,7 @@
 -- @http:\/\/host:port\/api\/image\/KEY@, with the size wanted in the query.
 -- No registration and no token are needed.
 --
--- The request goes through the 'Http' effect of @effectful-streamly-http@:
+-- The request goes through the t'Http' effect of @effectful-streamly-http@:
 -- 'runImageHttp' reaches the server, and tests answer from a function.
 --
 -- Observed with Roon Server 2.75: an unknown key answers 404; an invalid
@@ -136,7 +136,7 @@ data Image = Image
 --
 -- Throws 'ImageFailed' when the server refuses (unknown key, invalid
 -- option). What the connection itself can do wrong is up to the
--- interpreter of 'Http': see 'runImageHttp'.
+-- interpreter of t'Http': see 'runImageHttp'.
 fetchImage :: (Http :> es, Error RoonError :> es) => ServerAddress -> Text -> ImageOptions -> Eff es Image
 fetchImage address key options = do
   response <- Http.fetch Http (Http.get address.host address.port (imageTarget key options))

@@ -9,7 +9,7 @@
 --
 -- Item keys are only valid while the session stays where it was when they
 -- were loaded. A session is identified by its hierarchy and, to run
--- several at once, a key of its own ('Session').
+-- several at once, a key of its own: see t'Session'.
 --
 -- Categories and actions are only known by their titles, such as
 -- @Tracks@ or @Play Now@. Those of this module are the English ones; they
