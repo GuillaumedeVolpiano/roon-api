@@ -73,36 +73,24 @@ module Roon.Transport
   , transferZone
   ) where
 
-import Data.Aeson
-  ( FromJSON (..)
-  , ToJSON (..)
-  , Value
-  , object
-  , withObject
-  , withText
-  , (.:)
-  , (.:?)
-  , (.!=)
-  , (.=)
-  )
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject,
+                   withText, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (Map, adjust, delete, empty, fromList, union)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
-import Effectful
+import Effectful (Eff, IOE, MonadIO (..), type (:>))
 import Effectful.Error.Static (Error)
-import Effectful.Streamly.Stream qualified as Concurrent
+import Effectful.Streamly.Stream (parList)
+import GHC.Clock (getMonotonicTime)
 import Roon.Effect.Moo (Moo, request)
 import Roon.Error (RoonError)
 import Roon.Moo.Message (Body (..))
 import Roon.Service (call, expect, subscribe, subscriptionUpdates)
 import Streamly.Data.Fold (Fold)
-import Streamly.Data.Fold qualified as Fold
-import GHC.Clock (getMonotonicTime)
-import Streamly.Data.Scanl qualified as Scanl
-import Streamly.Data.Stream (Stream)
-import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.Fold qualified as F (foldl')
+import Streamly.Data.Scanl (mkScanl, mkScanlM)
+import Streamly.Data.Stream (Stream, mapMaybe, postscanl)
 
 -- | The name of the transport service, version included.
 transportService :: Text
@@ -410,11 +398,11 @@ applyZoneEvent = \case
   ZonesSubscribed list -> const (byId list)
   ZonesChanged changes ->
     flip (foldr applySeek) changes.seekChanged
-      . Map.union (byId (changes.changed <> changes.added))
-      . flip (foldr Map.delete) changes.removed
+      . union (byId (changes.changed <> changes.added))
+      . flip (foldr delete) changes.removed
   where
-    byId list = Map.fromList [(zone.zoneId, zone) | zone <- list]
-    applySeek change = Map.adjust (seekTo change) change.zoneId
+    byId list = fromList [(zone.zoneId, zone) | zone <- list]
+    applySeek change = adjust (seekTo change) change.zoneId
     -- Built with the constructors: the field names are shared with
     -- 'SeekChange', which makes record updates ambiguous.
     seekTo change Zone {..} =
@@ -423,11 +411,11 @@ applyZoneEvent = \case
 
 -- | The zones as the events describe them, at the end of the stream.
 zones :: Monad m => Fold m ZoneEvent (Map ZoneId Zone)
-zones = Fold.foldl' (flip applyZoneEvent) Map.empty
+zones = F.foldl' (flip applyZoneEvent) empty
 
 -- | The zones after each event.
 zoneViews :: Monad m => Stream m ZoneEvent -> Stream m (Map ZoneId Zone)
-zoneViews = Stream.postscanl (Scanl.mkScanl (flip applyZoneEvent) Map.empty)
+zoneViews = postscanl (mkScanl (flip applyZoneEvent) empty)
 
 -- | The zones after each event, except that events which only move the
 -- seek position give a view at most once per interval, in seconds. A
@@ -436,7 +424,7 @@ zoneViews = Stream.postscanl (Scanl.mkScanl (flip applyZoneEvent) Map.empty)
 -- the positions not reported until then.
 zoneViewsEvery :: MonadIO m => Double -> Stream m ZoneEvent -> Stream m (Map ZoneId Zone)
 zoneViewsEvery interval =
-  Stream.mapMaybe (\(_, _, view) -> view) . Stream.postscanl (Scanl.mkScanlM step (pure (Map.empty, Nothing, Nothing)))
+  mapMaybe (\(_, _, view) -> view) . postscanl (mkScanlM step (pure (empty, Nothing, Nothing)))
   where
     step (current, lastShown, _) event = do
       now <- liftIO getMonotonicTime
@@ -533,7 +521,7 @@ applyQueueEvent = \case
 
 -- | The items as the events describe them.
 queue :: Monad m => Fold m QueueEvent [QueueItem]
-queue = Fold.foldl' (flip applyQueueEvent) []
+queue = F.foldl' (flip applyQueueEvent) []
 
 -- | An event of one of the subscriptions of 'subscribeTransport'.
 data TransportEvent
@@ -556,7 +544,7 @@ subscribeTransport
 subscribeTransport queueZones maxItems consume =
   subscribeZones $ \zoneEvents -> withQueues queueZones [ZoneUpdate <$> zoneEvents]
   where
-    withQueues [] streams = consume (Concurrent.parList id streams)
+    withQueues [] streams = consume (parList id streams)
     withQueues (zoneId : rest) streams =
       subscribeQueue zoneId maxItems $ \queueEvents -> withQueues rest ((QueueUpdate zoneId <$> queueEvents) : streams)
 

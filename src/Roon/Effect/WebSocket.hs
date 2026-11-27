@@ -23,20 +23,21 @@ module Roon.Effect.WebSocket
   , runWebSocketWith
   ) where
 
-import Data.Aeson qualified as Aeson
+import Data.Aeson (encode)
 import Data.ByteString (ByteString)
-import Data.ByteString qualified as ByteString
-import Data.ByteString.Lazy qualified as LazyByteString
-import Data.Text (Text)
-import Data.Text qualified as Text
-import Data.Text.Encoding (decodeUtf8Lenient)
-import Data.Text.Encoding (encodeUtf8)
-import Effectful
+import Data.ByteString qualified as BS (length, null)
+import Data.ByteString.Lazy (toStrict)
+import Data.Text (Text, pack, replace, toUpper)
+import Data.Text qualified as T (length, take)
+import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
+import Effectful (Eff, IOE, inject, type (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.WebSocket (Message (..), Traffic (..), WebSocket, messages, sendBinary, traced)
-import Effectful.WebSocket qualified as WebSocket
-import Effectful.WebSocket.Client (WebSocketError, clientConfig, runWebSocketClient)
-import Effectful.WebSocket.Client qualified as Client
+import Effectful.WebSocket (Message (..), Traffic (..), WebSocket, messages,
+                            sendBinary, traced)
+import Effectful.WebSocket qualified as W (runWebSocketWith)
+import Effectful.WebSocket.Client (ClientConfig (closeTimeout), WebSocketError,
+                                   clientConfig, runWebSocketClient)
+import Effectful.WebSocket.Client qualified as WC (WebSocketError (ConnectFailed, NoPong))
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..), MooMessage (..), RequestId (..), parse)
 import Streamly.Data.Stream (Stream)
@@ -75,7 +76,7 @@ runWebSocketWith
   -> Eff (WebSocket : es) a
   -> Eff es a
 runWebSocketWith sendAction receiveAction =
-  WebSocket.runWebSocketWith
+  W.runWebSocketWith
     (sendAction . \case BinaryMessage bytes -> bytes; TextMessage text -> encodeUtf8 text)
     (fmap BinaryMessage <$> receiveAction)
 
@@ -93,13 +94,13 @@ runWebSocket
 runWebSocket address action =
   runErrorNoCallStack @WebSocketError (runWebSocketClient config (inject action)) >>= \case
     Right value -> pure value
-    Left (Client.ConnectFailed cause) -> throwError (ConnectFailed cause)
-    Left Client.NoPong -> throwError ConnectionLost
+    Left (WC.ConnectFailed cause) -> throwError (ConnectFailed cause)
+    Left WC.NoPong -> throwError ConnectionLost
   where
     -- Roon Server 2.75 never answers the close frame: waiting for it would
     -- last the whole limit. A short wait still lets Roon read our last
     -- frames, and us read its own, before the TCP connection goes.
-    config = (clientConfig address.host address.port "/api") {Client.closeTimeout = 100_000}
+    config = (clientConfig address.host address.port "/api") {closeTimeout = 100_000}
 
 -- | Report every frame of an action, as one line of text each: @->@ for
 -- the frames sent, @<-@ for those received. Bodies are cut after the given
@@ -118,18 +119,18 @@ traceFrames limit report = traced $ \case
 -- the given number of characters, or why it is not a MOO message.
 describeFrame :: Int -> ByteString -> Text
 describeFrame limit frame
-  | ByteString.null frame = "empty frame"
+  | BS.null frame = "empty frame"
   | otherwise = case parse frame of
-      Left err -> "not a MOO message (" <> Text.pack (show err) <> "): " <> cut limit (decodeUtf8Lenient frame)
+      Left err -> "not a MOO message (" <> pack (show err) <> "): " <> cut limit (decodeUtf8Lenient frame)
       Right MooMessage {verb, name, requestId = RequestId requestId, body} ->
-        Text.toUpper (Text.pack (show verb)) <> " " <> name <> " [" <> requestId <> "]" <> case body of
+        toUpper (pack (show verb)) <> " " <> name <> " [" <> requestId <> "]" <> case body of
           NoBody -> ""
-          JsonBody value -> " " <> cut limit (decodeUtf8Lenient (LazyByteString.toStrict (Aeson.encode value)))
-          RawBody contentType bytes -> " " <> contentType <> ", " <> Text.pack (show (ByteString.length bytes)) <> " bytes"
+          JsonBody value -> " " <> cut limit (decodeUtf8Lenient (toStrict (encode value)))
+          RawBody contentType bytes -> " " <> contentType <> ", " <> pack (show (BS.length bytes)) <> " bytes"
 
 cut :: Int -> Text -> Text
 cut limit text
-  | Text.length flat <= limit = flat
-  | otherwise = Text.take limit flat <> "... (" <> Text.pack (show (Text.length flat)) <> " characters)"
+  | T.length flat <= limit = flat
+  | otherwise = T.take limit flat <> "... (" <> pack (show (T.length flat)) <> " characters)"
   where
-    flat = Text.replace "\n" "\\n" text
+    flat = replace "\n" "\\n" text

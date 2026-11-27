@@ -35,19 +35,23 @@ module Roon.Moo.Message
   ) where
 
 import Control.Monad (when)
-import Data.Aeson (Value)
-import Data.Aeson qualified as Aeson
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
-import Data.ByteString.Builder qualified as Builder
-import Data.ByteString.Lazy qualified as BSL
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
-import Data.Text (Text)
-import Data.Text qualified as Text
-import Data.Text.Encoding qualified as Text
+import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Aeson qualified as J (encode)
+import Data.ByteString (ByteString, breakSubstring, empty)
+import Data.ByteString qualified as BS (drop, length, null, take)
+import Data.ByteString.Builder (Builder, intDec, toLazyByteString)
+import Data.ByteString.Builder qualified as BSB (byteString)
+import Data.ByteString.Lazy (toStrict)
+import Data.Map.Strict (Map, delete, foldMapWithKey, fromList)
+import Data.Map.Strict qualified as M (lookup)
+import Data.Text (Text, breakOn, pack, stripPrefix, unpack)
+import Data.Text qualified as T (null)
+import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Word (Word64)
-import FlatParse.Basic qualified as FP
+import FlatParse.Basic (Parser, Pos (Pos), Result (Err, Fail, OK), anyWord8,
+                        byteStringOf, cut, eof, failed, fails, getPos, many,
+                        runParser, skipMany, skipSatisfyAscii, skipSome, word8)
+import FlatParse.Basic qualified as FB (byteString)
 import Text.Read (readMaybe)
 
 -- | The kind of a MOO message.
@@ -68,7 +72,7 @@ newtype RequestId = RequestId Text
 
 -- | The identifier for the n-th request sent on a connection.
 requestIdFromWord :: Word64 -> RequestId
-requestIdFromWord = RequestId . Text.pack . show
+requestIdFromWord = RequestId . pack . show
 
 -- | The payload of a message.
 data Body
@@ -121,16 +125,16 @@ data MooParseError
 -- >>> splitServiceMethod "com.roonlabs.ping:1/ping"
 -- Just ("com.roonlabs.ping:1","ping")
 splitServiceMethod :: Text -> Maybe (Text, Text)
-splitServiceMethod full = case Text.breakOn "/" full of
+splitServiceMethod full = case breakOn "/" full of
   (service, rest)
-    | not (Text.null service), Just method <- Text.stripPrefix "/" rest ->
+    | not (T.null service), Just method <- stripPrefix "/" rest ->
         Just (service, method)
   _ -> Nothing
 
 -- | Serialise a message into the bytes of one WebSocket binary frame.
 encode :: MooMessage -> ByteString
 encode msg =
-  BSL.toStrict . Builder.toLazyByteString $
+  toStrict . toLazyByteString $
     mconcat
       [ "MOO/1 "
       , verbBuilder msg.verb
@@ -138,27 +142,27 @@ encode msg =
       , text msg.name
       , "\n"
       , header "Request-Id" (let RequestId rid = msg.requestId in rid)
-      , Map.foldMapWithKey header msg.headers
+      , foldMapWithKey header msg.headers
       , contentHeaders
       , "\n"
-      , Builder.byteString payload
+      , BSB.byteString payload
       ]
   where
-    text = Builder.byteString . Text.encodeUtf8
+    text = BSB.byteString . encodeUtf8
     header key value = text key <> ": " <> text value <> "\n"
     (contentType, payload) = case msg.body of
-      NoBody -> (Nothing, BS.empty)
-      JsonBody value -> (Just jsonContentType, BSL.toStrict (Aeson.encode value))
+      NoBody -> (Nothing, empty)
+      JsonBody value -> (Just jsonContentType, toStrict (J.encode value))
       RawBody ctype bytes -> (Just ctype, bytes)
     contentHeaders = case contentType of
       Nothing -> mempty
       Just ctype ->
         "Content-Length: "
-          <> Builder.intDec (BS.length payload)
+          <> intDec (BS.length payload)
           <> "\n"
           <> header "Content-Type" ctype
 
-verbBuilder :: Verb -> Builder.Builder
+verbBuilder :: Verb -> Builder
 verbBuilder = \case
   Request -> "REQUEST"
   Continue -> "CONTINUE"
@@ -173,30 +177,30 @@ jsonContentType = "application/json"
 -- @Content-Length@ and keeps the last occurrence of a repeated header.
 parse :: ByteString -> Either MooParseError MooMessage
 parse frame = do
-  let (headerBlock, rest) = BS.breakSubstring "\n\n" frame
+  let (headerBlock, rest) = breakSubstring "\n\n" frame
   when (BS.null rest) (Left MissingHeaderEnd)
   let payload = BS.drop 2 rest
   -- Keep the line feed that ends the last header line, so that the block
   -- is a sequence of terminated lines.
   let headerLines = BS.take (BS.length headerBlock + 1) frame
   (verbName, name, headerList) <-
-    case FP.runParser headerBlockParser headerLines of
-      FP.OK parsed _ -> Right parsed
+    case runParser headerBlockParser headerLines of
+      OK parsed _ -> Right parsed
       -- The position of an error is counted from the end of the input.
-      FP.Err (FP.Pos fromEnd, reason) -> Left (MalformedHeader (BS.length headerLines - fromEnd) reason)
-      FP.Fail -> Left (MalformedHeader 0 "not a MOO header block")
+      Err (Pos fromEnd, reason) -> Left (MalformedHeader (BS.length headerLines - fromEnd) reason)
+      Fail -> Left (MalformedHeader 0 "not a MOO header block")
   verb <- case verbName of
     "REQUEST" -> Right Request
     "CONTINUE" -> Right Continue
     "COMPLETE" -> Right Complete
     other -> Left (UnknownVerb other)
-  let allHeaders = Map.fromList headerList
-      headers = foldr Map.delete allHeaders ["Request-Id", "Content-Length", "Content-Type"]
-      contentType = Map.lookup "Content-Type" allHeaders
-  requestId <- maybe (Left MissingRequestId) (Right . RequestId) (Map.lookup "Request-Id" allHeaders)
-  contentLength <- case Map.lookup "Content-Length" allHeaders of
+  let allHeaders = fromList headerList
+      headers = foldr delete allHeaders ["Request-Id", "Content-Length", "Content-Type"]
+      contentType = M.lookup "Content-Type" allHeaders
+  requestId <- maybe (Left MissingRequestId) (Right . RequestId) (M.lookup "Request-Id" allHeaders)
+  contentLength <- case M.lookup "Content-Length" allHeaders of
     Nothing -> Right Nothing
-    Just raw -> case readMaybe (Text.unpack raw) of
+    Just raw -> case readMaybe (unpack raw) of
       Just n | n >= 0 -> Right (Just n)
       _ -> Left (InvalidContentLength raw)
   body <- case (contentLength, contentType) of
@@ -209,39 +213,39 @@ parse frame = do
     (Just n, Just ctype)
       | BS.length payload < n -> Left (TruncatedBody n (BS.length payload))
       | ctype == jsonContentType ->
-          either (Left . InvalidJson) (Right . JsonBody) (Aeson.eitherDecodeStrict (BS.take n payload))
+          either (Left . InvalidJson) (Right . JsonBody) (eitherDecodeStrict (BS.take n payload))
       | otherwise -> Right (RawBody ctype (BS.take n payload))
   pure MooMessage {verb, name, requestId, headers, body}
 
 -- | The first line and the header lines, each ended by a line feed.
 -- Yields the verb, the name and the headers in order. A line that is not
 -- what it should be is an error, with the position where it starts.
-headerBlockParser :: FP.Parser (FP.Pos, String) (Text, Text, [(Text, Text)])
+headerBlockParser :: Parser (Pos, String) (Text, Text, [(Text, Text)])
 headerBlockParser = do
   (verbName, name) <- wholeLine "the first line is not MOO/1, a verb in capitals and a name" $ do
-    FP.byteString "MOO/1 "
-    verbName <- utf8 (FP.byteStringOf (FP.skipSome (FP.skipSatisfyAscii (\char -> char >= 'A' && char <= 'Z'))))
-    FP.word8 space
+    FB.byteString "MOO/1 "
+    verbName <- utf8 (byteStringOf (skipSome (skipSatisfyAscii (\char -> char >= 'A' && char <= 'Z'))))
+    word8 space
     name <- restOfLine
     pure (verbName, name)
-  headerList <- FP.many (FP.fails FP.eof *> wholeLine "a header line is not a key, a colon and a value" headerLine)
-  FP.eof
+  headerList <- many (fails eof *> wholeLine "a header line is not a key, a colon and a value" headerLine)
+  eof
   pure (verbName, name, headerList)
   where
     -- @Key: value@. The spaces after the colon are optional.
     headerLine = do
-      key <- utf8 (FP.byteStringOf (FP.skipSome (notByte colon)))
-      FP.word8 colon
-      FP.skipMany (FP.word8 space)
+      key <- utf8 (byteStringOf (skipSome (notByte colon)))
+      word8 colon
+      skipMany (word8 space)
       value <- restOfLine
       pure (key, value)
-    restOfLine = utf8 (FP.byteStringOf (FP.skipMany (notByte lineFeed))) <* FP.word8 lineFeed
+    restOfLine = utf8 (byteStringOf (skipMany (notByte lineFeed))) <* word8 lineFeed
     -- A line, or an error that names what is wrong and where it starts.
     wholeLine problem content = do
-      start <- FP.getPos
-      content `FP.cut` (start, problem)
-    utf8 bytesParser = bytesParser >>= either (const FP.failed) pure . Text.decodeUtf8'
-    notByte excluded = FP.anyWord8 >>= \byte -> if byte == excluded || byte == lineFeed then FP.failed else pure ()
+      start <- getPos
+      content `cut` (start, problem)
+    utf8 bytesParser = bytesParser >>= either (const failed) pure . decodeUtf8'
+    notByte excluded = anyWord8 >>= \byte -> if byte == excluded || byte == lineFeed then failed else pure ()
     space = 32
     colon = 58
     lineFeed = 10

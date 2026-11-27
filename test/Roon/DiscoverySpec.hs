@@ -4,11 +4,18 @@ module Roon.DiscoverySpec (tests) where
 import Control.Concurrent.Async (withAsync)
 import Control.Exception (bracket)
 import Control.Monad (void)
-import Data.ByteString qualified as ByteString
+import Data.ByteString qualified as BS (length, take)
 import Effectful (runEff)
-import Network.Socket qualified as Socket
-import Network.Socket.ByteString qualified as SocketBytes
-import Roon.Discovery
+import Network.Socket (Family (AF_INET), HostAddress, PortNumber,
+                       SockAddr (SockAddrInet), SocketType (Datagram), bind,
+                       close, defaultProtocol, socketPort, tupleToHostAddress)
+import Network.Socket qualified as N (socket)
+import Network.Socket.ByteString (recvFrom, sendTo)
+import Roon.Discovery (Core (address, name, uniqueId),
+                       DiscoveryOptions (DiscoveryOptions, targets, wait),
+                       SoodMessage (SoodMessage, kind, properties),
+                       coreFromAnswer, decodeSood, discover, encodeSood,
+                       roonServiceId)
 import Roon.Effect.WebSocket (ServerAddress (..))
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
@@ -31,12 +38,12 @@ tests =
           let name = ("name", Just "Test Core")
               first = SoodMessage {kind = 'R', properties = [name]}
               full = encodeSood SoodMessage {kind = 'R', properties = [name, ("port", Just "9330")]}
-              boundary = ByteString.length (encodeSood first)
+              boundary = BS.length (encodeSood first)
           -- Every prefix that ends inside a property is refused; the one that
           -- ends between the two properties is the first one alone.
-          [decodeSood (ByteString.take n full) | n <- [7 .. ByteString.length full - 1], n /= boundary]
-            @?= replicate (ByteString.length full - 8) Nothing
-          decodeSood (ByteString.take boundary full) @?= Just first
+          [decodeSood (BS.take n full) | n <- [7 .. BS.length full - 1], n /= boundary]
+            @?= replicate (BS.length full - 8) Nothing
+          decodeSood (BS.take boundary full) @?= Just first
       , testCase "reads a server from an answer" $
           fmap (\core -> (core.uniqueId, core.name, core.address)) (coreFromAnswer "192.0.2.7" (answer []))
             @?= Just ("core-1", Just "Test Core", ServerAddress {host = "192.0.2.7", port = 9330})
@@ -70,17 +77,17 @@ tests =
               <> extra
         }
 
-loopback :: Socket.HostAddress
-loopback = Socket.tupleToHostAddress (127, 0, 0, 1)
+loopback :: HostAddress
+loopback = tupleToHostAddress (127, 0, 0, 1)
 
 -- | A server on a free loopback port that answers every query three
 -- times, as Roon answers several times, and, like Roon, ignores a query
 -- with the transaction id of the previous one, or without any.
-withFakeServer :: (Socket.PortNumber -> IO a) -> IO a
+withFakeServer :: (PortNumber -> IO a) -> IO a
 withFakeServer run =
-  bracket (Socket.socket Socket.AF_INET Socket.Datagram Socket.defaultProtocol) Socket.close $ \socket -> do
-    Socket.bind socket (Socket.SockAddrInet 0 loopback)
-    port <- Socket.socketPort socket
+  bracket (N.socket AF_INET Datagram defaultProtocol) close $ \socket -> do
+    bind socket (SockAddrInet 0 loopback)
+    port <- socketPort socket
     let reply =
           encodeSood
             SoodMessage
@@ -88,12 +95,12 @@ withFakeServer run =
               , properties = [("unique_id", Just "core-1"), ("service_id", Just roonServiceId), ("http_port", Just "9330")]
               }
         serve previous = do
-          (query, sender) <- SocketBytes.recvFrom socket 65535
+          (query, sender) <- recvFrom socket 65535
           case decodeSood query of
             Just SoodMessage {kind = 'Q', properties}
               | Just (Just transaction) <- lookup "_tid" properties
               , Just transaction /= previous -> do
-                  mapM_ (const (void (SocketBytes.sendTo socket reply sender))) [1 .. 3 :: Int]
+                  mapM_ (const (void (sendTo socket reply sender))) [1 .. 3 :: Int]
                   serve (Just transaction)
             _ -> serve previous
     withAsync (serve Nothing) (const (run port))

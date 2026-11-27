@@ -36,53 +36,31 @@ module Roon.Effect.Moo
   ) where
 
 import Control.Monad (forever, void, (>=>))
-import Data.Bool (bool)
 import Data.Aeson (object, (.=))
+import Data.Bool (bool)
 import Data.ByteString (ByteString)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (Map, delete, empty, insert)
+import Data.Map.Strict qualified as M (lookup)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Word (Word64)
-import Effectful
+import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, type (:>))
 import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (withAsync)
-import Effectful.Concurrent.STM
-  ( STM
-  , TQueue
-  , TVar
-  , atomically
-  , modifyTVar'
-  , newTQueue
-  , newTQueueIO
-  , newTVar
-  , newTVarIO
-  , orElse
-  , readTQueue
-  , readTVar
-  , registerDelay
-  , retry
-  , writeTQueue
-  , writeTVar
-  )
+import Effectful.Concurrent.STM (STM, TQueue, TVar, atomically, modifyTVar',
+                                 newTQueue, newTQueueIO, newTVar, newTVarIO,
+                                 orElse, readTQueue, readTVar, registerDelay,
+                                 retry, writeTQueue, writeTVar)
 import Effectful.Dispatch.Dynamic (interpret_, send)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (finally)
 import Roon.Effect.WebSocket (WebSocket, frames, sendFrame)
 import Roon.Error (RoonError (..))
-import Roon.Moo.Message
-  ( Body (..)
-  , MooMessage (..)
-  , RequestId
-  , Verb (..)
-  , encode
-  , parse
-  , requestIdFromWord
-  , splitServiceMethod
-  )
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Stream (Stream)
-import Streamly.Data.Stream qualified as Stream
+import Roon.Moo.Message (Body (..), MooMessage (..), RequestId, Verb (..),
+                         encode, parse, requestIdFromWord, splitServiceMethod)
+import Streamly.Data.Fold (catMaybes, one)
+import Streamly.Data.Stream (Stream, fold, unfoldrM)
+import Streamly.Data.Stream qualified as S (mapM)
 
 -- | A reply to a request.
 data Reply = Reply
@@ -179,7 +157,7 @@ withSubscription
   -> Eff es a
 withSubscription name body consume = do
   exchange <- openExchange name body
-  consume (Stream.unfoldrM (const (fmap (,()) <$> nextReply exchange)) ())
+  consume (unfoldrM (const (fmap (,()) <$> nextReply exchange)) ())
     `finally` closeExchange exchange
 
 -- | Answers a request made by the server. Receives the service, the
@@ -224,7 +202,7 @@ runMoo
   -> Eff (Moo : es) a
   -> Eff es a
 runMoo handler action = do
-  state <- MooState <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTVarIO 0 <*> newTQueueIO
+  state <- MooState <$> newTVarIO 0 <*> newTVarIO empty <*> newTVarIO Nothing <*> newTVarIO 0 <*> newTQueueIO
   withAsync (receiveLoop state) $ \_ ->
     withAsync (answerLoop state handler) $ \_ ->
       interpret_ (handleMoo state) action
@@ -243,12 +221,12 @@ handleMoo state = \case
           requestId <- requestIdFromWord <$> readTVar state.nextId
           modifyTVar' state.nextId (+ 1)
           exchange <- Exchange requestId name <$> newTQueue <*> newTVar False
-          modifyTVar' state.pending (Map.insert requestId exchange)
+          modifyTVar' state.pending (insert requestId exchange)
           pure (Right exchange)
     case opened of
       Left reason -> pure (Left reason)
       Right exchange -> do
-        sent <- sendFrame (encode MooMessage {verb = Request, name, requestId = exchange.requestId, headers = Map.empty, body})
+        sent <- sendFrame (encode MooMessage {verb = Request, name, requestId = exchange.requestId, headers = empty, body})
         if sent
           then pure (Right exchange)
           else Left ConnectionLost <$ atomically (forget state exchange)
@@ -271,7 +249,7 @@ handleMoo state = \case
 -- | Remove an exchange from the routing table and mark it as over.
 forget :: MooState -> Exchange -> STM ()
 forget state exchange = do
-  modifyTVar' state.pending (Map.delete exchange.requestId)
+  modifyTVar' state.pending (delete exchange.requestId)
   writeTVar exchange.finished True
 
 -- | Route incoming frames until the connection closes or the server
@@ -279,7 +257,7 @@ forget state exchange = do
 receiveLoop :: (WebSocket :> es, Concurrent :> es) => MooState -> Eff es ()
 receiveLoop state =
   ( do
-      failure <- Stream.fold (Fold.catMaybes Fold.one) (Stream.mapM (dispatch state) frames)
+      failure <- fold (catMaybes one) (S.mapM (dispatch state) frames)
       closeConnection state (fromMaybe ConnectionLost failure)
   )
     `finally` closeConnection state ConnectionLost
@@ -300,7 +278,7 @@ answerLoop state handler = forever answerNext `finally` closeConnection state Co
         Just (service, method) -> handler service method message.body
         Nothing -> pure ("InvalidRequest", JsonBody (object ["error" .= ("malformed request name: " <> message.name)]))
       void . sendFrame $
-        encode MooMessage {verb = Complete, name = status, requestId = message.requestId, headers = Map.empty, body}
+        encode MooMessage {verb = Complete, name = status, requestId = message.requestId, headers = empty, body}
 
 -- | Handle one frame. Returns the reason to stop, if any.
 dispatch :: Concurrent :> es => MooState -> ByteString -> Eff es (Maybe RoonError)
@@ -315,7 +293,7 @@ dispatch state frame = case parse frame of
     -- A reply to an unknown or closed exchange is dropped.
     deliver message final = atomically $ do
       exchanges <- readTVar state.pending
-      case Map.lookup message.requestId exchanges of
+      case M.lookup message.requestId exchanges of
         Nothing -> pure ()
         Just exchange -> do
           writeTQueue exchange.replies Reply {final, name = message.name, body = message.body}

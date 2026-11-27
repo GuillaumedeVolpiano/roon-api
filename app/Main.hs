@@ -3,33 +3,42 @@
 -- library against a real server.
 module Main (main) where
 
-import Data.ByteString qualified as ByteString
-import Data.Text (Text)
-import Data.Text qualified as Text
+import Data.ByteString qualified as BS (length)
+import Data.Text (Text, intercalate, pack, stripPrefix, toCaseFold)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Version (showVersion)
-import Effectful
+import Effectful (Eff, IOE, runEff, type (:>))
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Console.ByteString (Console, runConsole)
-import Effectful.Console.ByteString qualified as Console
-import Effectful.Environment (Environment, getArgs, getProgName, lookupEnv, runEnvironment)
+import Effectful.Console.ByteString qualified as C (putStrLn)
+import Effectful.Environment (Environment, getArgs, getProgName, lookupEnv,
+                              runEnvironment)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.FileSystem.IO (stderr)
 import Effectful.FileSystem.IO.ByteString (hPutStrLn, writeFile)
-import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
-import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile, saveToken)
-import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket, traceFrames)
-import Roon.Error (RoonError)
-import Roon.Browse (BrowseResult (..), Hierarchy (..), Item (..), ItemHint (..), List (..), LoadResult (..), Navigation (..), Session (..), browse, load)
-import Roon.Connection (withRoon)
-import Roon.Discovery (Core (..), defaultDiscovery, discover)
-import Roon.Image (Image (..), defaultImageLimits, fetchImage, fitWithin, runImageHttp)
-import Roon.Registry
-import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), ZoneId, getZones)
-import System.Exit (exitFailure)
 import Paths_roon_api (version)
 import Prelude hiding (writeFile)
+import Roon.Browse (BrowseResult (..), Hierarchy (..), Item (..), ItemHint (..),
+                    List (..), LoadResult (..), Navigation (..), Session (..),
+                    browse, load)
+import Roon.Connection (withRoon)
+import Roon.Discovery (Core (..), defaultDiscovery, discover)
+import Roon.Effect.Moo (defaultRequestHandler, pingService, runMoo)
+import Roon.Effect.TokenStore (defaultTokenFile, loadToken, runTokenStoreFile,
+                               saveToken)
+import Roon.Effect.WebSocket (ServerAddress (..), localServer, runWebSocket,
+                              traceFrames)
+import Roon.Error (RoonError)
+import Roon.Image (Image (..), defaultImageLimits, fetchImage, fitWithin,
+                   runImageHttp)
+import Roon.Registry (CoreInfo (coreId, displayName, displayVersion),
+                      ExtensionInfo (..),
+                      Registration (core, grantedServices, token), info,
+                      register)
+import Roon.Transport (DisplayLines (..), NowPlaying (..), Zone (..), ZoneId,
+                       getZones)
+import System.Exit (exitFailure)
 import Text.Read (readMaybe)
 
 main :: IO ()
@@ -48,8 +57,8 @@ program =
       cores <- discover defaultDiscovery
       case cores of
         [] -> False <$ complain "No Roon Server answered."
-        _ -> True <$ mapM_ (\core -> say (core.uniqueId <> "  " <> maybe "" id core.name <> "  " <> maybe "" id core.displayVersion <> "  " <> Text.pack core.address.host <> ":" <> Text.pack (show core.address.port))) cores
-    "browse" : name : path | Just hierarchy <- lookup name hierarchies -> explore localServer hierarchy (map Text.pack path)
+        _ -> True <$ mapM_ (\core -> say (core.uniqueId <> "  " <> maybe "" id core.name <> "  " <> maybe "" id core.displayVersion <> "  " <> pack core.address.host <> ":" <> pack (show core.address.port))) cores
+    "browse" : name : path | Just hierarchy <- lookup name hierarchies -> explore localServer hierarchy (map pack path)
     ["image", key, file] -> saveImage localServer key file
     ["image", key, file, host] -> saveImage localServer {host} key file
     ["image", key, file, host, portText] | Just port <- readMaybe portText -> saveImage ServerAddress {host, port} key file
@@ -57,7 +66,7 @@ program =
     [host, portText] | Just port <- readMaybe portText -> probe ServerAddress {host, port}
     _ -> do
       name <- getProgName
-      complain ("usage: " <> Text.pack name <> " [HOST [PORT] | discover | image KEY FILE [HOST [PORT]] | browse HIERARCHY [TITLE...]]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame; hierarchies: " <> Text.intercalate ", " (map (Text.pack . fst) hierarchies) <> ")")
+      complain ("usage: " <> pack name <> " [HOST [PORT] | discover | image KEY FILE [HOST [PORT]] | browse HIERARCHY [TITLE...]]   (default: 127.0.0.1 9330; ROON_TRACE=1 describes every frame; hierarchies: " <> intercalate ", " (map (pack . fst) hierarchies) <> ")")
       pure False
 
 extension :: ExtensionInfo
@@ -65,7 +74,7 @@ extension =
   ExtensionInfo
     { extensionId = "io.github.guillaumedevolpiano.roon-api.probe"
     , displayName = "roon-api probe"
-    , displayVersion = Text.pack (showVersion version)
+    , displayVersion = pack (showVersion version)
     , publisher = "roon-api"
     , email = "nobody@example.invalid"
     , website = Just "https://github.com/GuillaumedeVolpiano/roon-api"
@@ -102,36 +111,36 @@ explore address hierarchy path = do
         -- one of an earlier level.
         walk ("<" : rest) = browse current (Nothing :: Maybe ZoneId) (Back 1) >> walk rest
         walk (wanted : rest)
-          | Just key <- Text.stripPrefix "#" wanted = browse current (Nothing :: Maybe ZoneId) (Select key) >>= \result -> case result of
+          | Just key <- stripPrefix "#" wanted = browse current (Nothing :: Maybe ZoneId) (Select key) >>= \result -> case result of
               BrowseList _ -> walk rest
-              other -> pure (Just ("opening the key " <> key <> " gave " <> Text.pack (show other)))
+              other -> pure (Just ("opening the key " <> key <> " gave " <> pack (show other)))
         walk (wanted : rest) = do
           level <- load current 0 500
-          case [item | item <- level.items, Text.toCaseFold item.title == Text.toCaseFold wanted] of
+          case [item | item <- level.items, toCaseFold item.title == toCaseFold wanted] of
             Item {hint = Just Action} : _ -> pure (Just ("\"" <> wanted <> "\" is an action: not opened"))
             Item {itemKey = Just key} : _ -> browse current (Nothing :: Maybe ZoneId) (Select key) >> walk rest
             _ -> pure (Just ("no item titled \"" <> wanted <> "\" at this level"))
     _ <- browse current (Nothing :: Maybe ZoneId) (Top input)
     stopped <- walk titles
     level <- load current 0 40
-    say (level.list.title <> maybe "" (" / " <>) level.list.subtitle <> ": " <> Text.pack (show level.list.count) <> " items, level " <> Text.pack (show level.list.level) <> maybe "" ((", hint " <>) . Text.pack . show) level.list.hint)
-    mapM_ (\item -> say ("  " <> maybe "-" (Text.pack . show) item.hint <> " | " <> item.title <> maybe "" (" | " <>) item.subtitle <> maybe "" (const " | image") item.imageKey <> maybe "" (const " | asks for input") item.inputPrompt <> maybe "" (" | #" <>) item.itemKey)) level.items
+    say (level.list.title <> maybe "" (" / " <>) level.list.subtitle <> ": " <> pack (show level.list.count) <> " items, level " <> pack (show level.list.level) <> maybe "" ((", hint " <>) . pack . show) level.list.hint)
+    mapM_ (\item -> say ("  " <> maybe "-" (pack . show) item.hint <> " | " <> item.title <> maybe "" (" | " <>) item.subtitle <> maybe "" (const " | image") item.imageKey <> maybe "" (const " | asks for input") item.inputPrompt <> maybe "" (" | #" <>) item.itemKey)) level.items
     pure stopped
   case outcome of
     Right Nothing -> pure True
     Right (Just problem) -> False <$ complain ("roon-probe: " <> problem)
-    Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
+    Left err -> False <$ complain ("roon-probe: " <> pack (show err))
 
 -- | Fetch the image of a key, at most 1000 pixels wide and high, and write
 -- it to a file.
 saveImage :: ServerAddress -> String -> FilePath -> Eff Effects Bool
 saveImage address key file = do
-  outcome <- runErrorNoCallStack @RoonError (runImageHttp defaultImageLimits (fetchImage address (Text.pack key) (fitWithin 1000)))
+  outcome <- runErrorNoCallStack @RoonError (runImageHttp defaultImageLimits (fetchImage address (pack key) (fitWithin 1000)))
   case outcome of
-    Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
+    Left err -> False <$ complain ("roon-probe: " <> pack (show err))
     Right image -> do
       writeFile file image.bytes
-      say (Text.pack file <> ": " <> image.contentType <> ", " <> Text.pack (show (ByteString.length image.bytes)) <> " bytes")
+      say (pack file <> ": " <> image.contentType <> ", " <> pack (show (BS.length image.bytes)) <> " bytes")
       pure True
 
 probe :: ServerAddress -> Eff Effects Bool
@@ -140,7 +149,7 @@ probe address = do
   -- ROON_TRACE, when set, describes every frame on stderr.
   tracing <- maybe False (not . null) <$> lookupEnv "ROON_TRACE"
   let trace = if tracing then traceFrames 300 complain else id
-  say ("Connecting to " <> Text.pack address.host <> ":" <> Text.pack (show address.port))
+  say ("Connecting to " <> pack address.host <> ":" <> pack (show address.port))
   outcome <-
     runErrorNoCallStack @RoonError . runTokenStoreFile tokenFile $
       runWebSocket address . trace . runMoo defaultRequestHandler $ do
@@ -153,24 +162,24 @@ probe address = do
           Nothing -> "Registering. Enable \"" <> extension.displayName <> "\" in Roon, under Settings, Extensions"
         registration <- register extension token
         saveToken registration.core.coreId registration.token
-        say ("Registered. Token saved in " <> Text.pack tokenFile)
+        say ("Registered. Token saved in " <> pack tokenFile)
         say $ case registration.grantedServices of
           [] -> "Granted services: none"
-          services -> "Granted services: " <> Text.intercalate ", " services
+          services -> "Granted services: " <> intercalate ", " services
         zones <- getZones
         mapM_ (say . describe) zones
   case outcome of
     Right () -> pure True
-    Left err -> False <$ complain ("roon-probe: " <> Text.pack (show err))
+    Left err -> False <$ complain ("roon-probe: " <> pack (show err))
 
 describe :: Zone -> Text
 describe zone =
-  "Zone " <> zone.displayName <> " (" <> Text.pack (show zone.state) <> ")" <> case zone.nowPlaying of
+  "Zone " <> zone.displayName <> " (" <> pack (show zone.state) <> ")" <> case zone.nowPlaying of
     Nothing -> ""
-    Just playing -> ": " <> Text.intercalate " / " (playing.threeLine.line1 : maybe [] pure playing.threeLine.line2 <> maybe [] pure playing.threeLine.line3)
+    Just playing -> ": " <> intercalate " / " (playing.threeLine.line1 : maybe [] pure playing.threeLine.line2 <> maybe [] pure playing.threeLine.line3)
 
 say :: Console :> es => Text -> Eff es ()
-say = Console.putStrLn . encodeUtf8
+say = C.putStrLn . encodeUtf8
 
 complain :: FileSystem :> es => Text -> Eff es ()
 complain = hPutStrLn stderr . encodeUtf8

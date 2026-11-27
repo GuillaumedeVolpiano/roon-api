@@ -27,10 +27,11 @@ module Roon.Registry
 import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
-import Effectful
+import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Exception (finally)
-import Roon.Effect.Moo (Exchange, Moo, Reply, closeExchange, nextReply, nextReplyWithin, openExchange, request)
+import Roon.Effect.Moo (Exchange, Moo, Reply, closeExchange, nextReply,
+                        nextReplyWithin, openExchange, request)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..))
 import Roon.Service (expect)

@@ -17,7 +17,7 @@ module Roon.Connection
   , withRoonReconnecting
   ) where
 
-import Effectful
+import Effectful (Eff, IOE, raise, type (:>))
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.STM (atomically, newTVarIO, readTVar, writeTVar)
 import Effectful.Error.Static (Error, throwError, tryError)
@@ -25,7 +25,8 @@ import Roon.Effect.Moo (Moo, defaultRequestHandler, pingService, runMoo)
 import Roon.Effect.TokenStore (TokenStore, loadToken, saveToken)
 import Roon.Effect.WebSocket (ServerAddress, WebSocket, runWebSocket)
 import Roon.Error (RoonError (..))
-import Roon.Registry (CoreInfo (..), ExtensionInfo (..), Registration (..), info, register, registerWithin)
+import Roon.Registry (CoreInfo (..), ExtensionInfo (..), Registration (..),
+                      info, register, registerWithin)
 
 -- | Register the extension, reusing the stored token if there is one, and
 -- store the token that the server returns.

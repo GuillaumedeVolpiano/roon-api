@@ -2,23 +2,31 @@
 -- in-memory transport.
 module Roon.ConnectionSpec (tests) where
 
-import Data.Aeson (Value (..), object, (.=))
-import Data.Map.Strict qualified as Map
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically, writeTQueue)
-import Data.Text (Text)
+import Data.Aeson (Value (..), object, (.=))
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.Map.Strict (empty, singleton)
+import Data.Text (Text)
 import Effectful (Eff, IOE, liftIO, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Roon.Connection (Reconnect (..), reconnecting, runRoon, runRoonWithin)
-import Roon.Effect.Moo
+import Roon.Effect.Moo (Reply (name), defaultRequestHandler, nextReply,
+                        openExchange, request, requestWithin, runMoo,
+                        withSubscription)
 import Roon.Error (RoonError (..))
-import Roon.Moo.Message
-import Roon.Registry
-import Roon.Test.Server
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Stream qualified as Stream
+import Roon.Moo.Message (Body (JsonBody, NoBody),
+                         MooMessage (name, requestId, verb),
+                         RequestId (RequestId), Verb (Complete, Continue))
+import Roon.Registry (Registration (Registration, core, grantedServices, token),
+                      info, registerWithin)
+import Roon.Test.Server (Wire (toClient), answer, closeConnection, coreBody,
+                         expectRequest, extension, field, receiveFromClient,
+                         registered, sendToClient, serveInfo, serverRequest,
+                         testCore, withServer)
+import Streamly.Data.Fold (toList)
+import Streamly.Data.Stream (fold)
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 
@@ -28,7 +36,7 @@ tests =
     testGroup
       "Roon.Connection"
       [ testCase "registers, answers a ping and stores the token" $ do
-          (outcome, ()) <- withServer Map.empty (runRoon extension pure) $ \wire -> do
+          (outcome, ()) <- withServer empty (runRoon extension pure) $ \wire -> do
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             field "extension_id" registerRequest @?= Just (String "test.extension")
             field "token" registerRequest @?= Nothing
@@ -45,21 +53,21 @@ tests =
                   , token = "tok-1"
                   , grantedServices = ["com.roonlabs.transport:2"]
                   }
-              , Map.singleton "core-1" "tok-1"
+              , singleton "core-1" "tok-1"
               )
       , testCase "presents the stored token and replaces it" $ do
-          (outcome, ()) <- withServer (Map.singleton "core-1" "old") (runRoon extension pure) $ \wire -> do
+          (outcome, ()) <- withServer (singleton "core-1" "old") (runRoon extension pure) $ \wire -> do
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             field "token" registerRequest @?= Just (String "old")
             answer wire registerRequest Continue "Registered" (registered "new")
-          fmap snd outcome @?= Right (Map.singleton "core-1" "new")
+          fmap snd outcome @?= Right (singleton "core-1" "new")
       , testCase "gives up when the extension is not enabled in time" $ do
-          (outcome, ()) <- withServer Map.empty (runRoonWithin (Just 50_000) extension pure) $ \wire -> do
+          (outcome, ()) <- withServer empty (runRoonWithin (Just 50_000) extension pure) $ \wire -> do
             _ <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             pure ()
           fmap fst outcome @?= Left (TimedOut "com.roonlabs.registry:1/register")
       , testCase "rejects a request for a service it does not provide" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler info) $ \wire -> do
             infoRequest <- expectRequest wire "com.roonlabs.registry:1/info"
             sendToClient wire (serverRequest "7" "com.example.unknown:1/anything")
             rejection <- receiveFromClient wire
@@ -97,7 +105,7 @@ tests =
                 -- Stay connected until the server has the answer.
                 liftIO (takeMVar answered)
                 pure reply.name
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             question <- expectRequest wire "svc:1/question"
             sendToClient wire (serverRequest "9" "svc:1/slow")
             answer wire question Complete "Answer" NoBody
@@ -110,7 +118,7 @@ tests =
                 first <- openExchange "svc:1/first" NoBody
                 second <- openExchange "svc:1/second" NoBody
                 (,) <$> nextReply first <*> nextReply second
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             first <- expectRequest wire "svc:1/first"
             second <- expectRequest wire "svc:1/second"
             answer wire second Complete "Second" NoBody
@@ -119,15 +127,15 @@ tests =
       , testCase "streams the replies of a subscription until the final one" $ do
           let client =
                 runMoo defaultRequestHandler $
-                  withSubscription "svc:1/subscribe_things" NoBody (Stream.fold Fold.toList . fmap (.name))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+                  withSubscription "svc:1/subscribe_things" NoBody (fold toList . fmap (.name))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "svc:1/subscribe_things"
             answer wire subscription Continue "Subscribed" NoBody
             answer wire subscription Continue "Changed" NoBody
             answer wire subscription Complete "Unsubscribed" NoBody
           fmap fst outcome @?= Right ["Subscribed", "Changed", "Unsubscribed"]
       , testCase "fails pending requests when the connection closes" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler info) $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
             closeConnection wire
           fmap fst outcome @?= Left ConnectionLost
@@ -138,12 +146,12 @@ tests =
                 first <- runErrorNoCallStack @RoonError info
                 second <- runErrorNoCallStack @RoonError info
                 pure (first, second)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
             closeConnection wire
           fmap fst outcome @?= Right (Left ConnectionLost, Left ConnectionLost)
       , testCase "reports a frame that is not a MOO message" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler info) $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
             atomically (writeTQueue wire.toClient (Just "HTTP/1.1 400 Bad Request\n\n"))
           case fmap fst outcome of
@@ -154,7 +162,7 @@ tests =
                 late <- runErrorNoCallStack @RoonError (requestWithin (Just 50_000) "svc:1/slow" NoBody)
                 next <- request "svc:1/fast" NoBody
                 pure (late, next.name)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             slow <- expectRequest wire "svc:1/slow"
             fast <- expectRequest wire "svc:1/fast"
             -- Too late: the client has stopped waiting, and drops it.
@@ -163,17 +171,17 @@ tests =
           fmap fst outcome @?= Right (Left (TimedOut "svc:1/slow"), "Fast")
       , testCase "gives up on a registration that is not enabled in time" $ do
           let client = runMoo defaultRequestHandler (registerWithin 50_000 extension Nothing)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/register"
             pure ()
           fmap fst outcome @?= Left (TimedOut "com.roonlabs.registry:1/register")
       , testCase "reports an unexpected status" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler info) $ \wire -> do
             infoRequest <- expectRequest wire "com.roonlabs.registry:1/info"
             answer wire infoRequest Complete "NotAvailable" NoBody
           fmap fst outcome @?= Left (UnexpectedReply "com.roonlabs.registry:1/info" "NotAvailable")
       , testCase "reports an unexpected body" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler info) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler info) $ \wire -> do
             infoRequest <- expectRequest wire "com.roonlabs.registry:1/info"
             answer wire infoRequest Complete "Success" (JsonBody (object ["core_id" .= ("core-1" :: Text)]))
           case fmap fst outcome of

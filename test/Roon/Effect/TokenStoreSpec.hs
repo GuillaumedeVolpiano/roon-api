@@ -1,10 +1,11 @@
 module Roon.Effect.TokenStoreSpec (tests) where
 
 import Data.Bits ((.&.))
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (fromList, singleton)
 import Effectful (runEff, runPureEff)
 import Effectful.FileSystem (runFileSystem)
-import Roon.Effect.TokenStore
+import Roon.Effect.TokenStore (loadToken, runTokenStoreFile, runTokenStorePure,
+                               saveToken)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -17,11 +18,11 @@ tests =
   testGroup
     "Roon.Effect.TokenStore"
     [ testCase "the pure store returns what was saved" $ do
-        let (loaded, final) = runPureEff . runTokenStorePure (Map.singleton "a" "1") $ do
+        let (loaded, final) = runPureEff . runTokenStorePure (singleton "a" "1") $ do
               saveToken "b" "2"
               (,,) <$> loadToken "a" <*> loadToken "b" <*> loadToken "c"
         loaded @?= (Just "1", Just "2", Nothing)
-        final @?= Map.fromList [("a", "1"), ("b", "2")]
+        final @?= fromList [("a", "1"), ("b", "2")]
     , testCase "the file store has no token before the file exists" $
         withSystemTempDirectory "roon-api-test" $ \directory -> do
           loaded <- runEff . runFileSystem . runTokenStoreFile (directory </> "missing" </> "tokens.json") $ loadToken "a"

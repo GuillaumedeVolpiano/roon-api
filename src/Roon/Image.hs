@@ -35,18 +35,20 @@ module Roon.Image
   , defaultImageLimits
   ) where
 
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as ByteString
-import Data.ByteString.Builder qualified as Builder
-import Data.ByteString.Char8 qualified as Char8
-import Data.ByteString.Lazy qualified as LazyByteString
-import Data.Text (Text)
-import Data.Text qualified as Text
+import Data.ByteString (ByteString, index, intercalate)
+import Data.ByteString qualified as BS (elem, foldr, take)
+import Data.ByteString.Builder (char7, toLazyByteString, word8)
+import Data.ByteString.Char8 qualified as BS8 (pack)
+import Data.ByteString.Lazy (toStrict)
+import Data.Text (Text, strip)
+import Data.Text qualified as T (pack, unwords)
 import Data.Text.Encoding (decodeUtf8Lenient, encodeUtf8)
-import Effectful
+import Effectful (Eff, IOE, inject, type (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.HTTP (Http, HttpError (..), HttpFailure, Limits (..), Response (..), Scheme (..))
-import Effectful.HTTP qualified as Http
+import Effectful.HTTP (Http, HttpError (..), HttpFailure, Limits (..),
+                       Response (..), Scheme (..), defaultLimits, fetch, get,
+                       header, runHttpClear)
+import Effectful.HTTP qualified as H (HttpFailure (ConnectFailed, RequestFailed))
 import Roon.Effect.WebSocket (ServerAddress (..))
 import Roon.Error (RoonError (..))
 
@@ -95,12 +97,12 @@ imageTarget :: Text -> ImageOptions -> ByteString
 imageTarget key options =
   "/api/image/" <> percentEncode (encodeUtf8 key) <> case sizeFields <> formatFields of
     [] -> ""
-    fields -> "?" <> ByteString.intercalate "&" [name <> "=" <> value | (name, value) <- fields]
+    fields -> "?" <> intercalate "&" [name <> "=" <> value | (name, value) <- fields]
   where
     sizeFields = case options.size of
       Original -> []
       Scaled scale width height ->
-        [("scale", scaleName scale), ("width", Char8.pack (show width)), ("height", Char8.pack (show height))]
+        [("scale", scaleName scale), ("width", BS8.pack (show width)), ("height", BS8.pack (show height))]
     formatFields = case options.format of
       Nothing -> []
       Just Jpeg -> [("format", "image/jpeg")]
@@ -112,17 +114,17 @@ imageTarget key options =
 
 -- | Percent-encode every byte that is not unreserved (RFC 3986).
 percentEncode :: ByteString -> ByteString
-percentEncode = LazyByteString.toStrict . Builder.toLazyByteString . ByteString.foldr (\byte rest -> encode byte <> rest) mempty
+percentEncode = toStrict . toLazyByteString . BS.foldr (\byte rest -> encode byte <> rest) mempty
   where
     encode byte
-      | unreserved byte = Builder.word8 byte
-      | otherwise = Builder.char7 '%' <> hexDigit (byte `div` 16) <> hexDigit (byte `mod` 16)
-    hexDigit digit = Builder.word8 (ByteString.index "0123456789ABCDEF" (fromIntegral digit))
+      | unreserved byte = word8 byte
+      | otherwise = char7 '%' <> hexDigit (byte `div` 16) <> hexDigit (byte `mod` 16)
+    hexDigit digit = word8 (index "0123456789ABCDEF" (fromIntegral digit))
     unreserved byte =
       (byte >= 48 && byte <= 57)
         || (byte >= 65 && byte <= 90)
         || (byte >= 97 && byte <= 122)
-        || ByteString.elem byte "-._~"
+        || BS.elem byte "-._~"
 
 -- | An image as served by Roon.
 data Image = Image
@@ -139,13 +141,13 @@ data Image = Image
 -- interpreter of t'Http': see 'runImageHttp'.
 fetchImage :: (Http :> es, Error RoonError :> es) => ServerAddress -> Text -> ImageOptions -> Eff es Image
 fetchImage address key options = do
-  response <- Http.fetch Http (Http.get address.host address.port (imageTarget key options))
+  response <- fetch Http (get address.host address.port (imageTarget key options))
   if response.status /= 200
     then
       -- Roon explains a refusal in a line of text.
-      throwError . ImageFailed . Text.strip . Text.unwords $
-        [Text.pack (show response.status), decodeUtf8Lenient response.reason, decodeUtf8Lenient (ByteString.take 1024 response.body)]
-    else pure Image {contentType = maybe "" decodeUtf8Lenient (Http.header "content-type" response), bytes = response.body}
+      throwError . ImageFailed . strip . T.unwords $
+        [T.pack (show response.status), decodeUtf8Lenient response.reason, decodeUtf8Lenient (BS.take 1024 response.body)]
+    else pure Image {contentType = maybe "" decodeUtf8Lenient (header "content-type" response), bytes = response.body}
 
 -- | The bounds of a fetch.
 data ImageLimits = ImageLimits
@@ -169,19 +171,19 @@ defaultImageLimits = ImageLimits {microseconds = 30_000_000, maxBytes = 32 * 102
 -- is not HTTP or sends too large an image.
 runImageHttp :: (IOE :> es, Error RoonError :> es) => ImageLimits -> Eff (Http : es) a -> Eff es a
 runImageHttp limits action =
-  runErrorNoCallStack (Http.runHttpClear bounds (inject action)) >>= either (throwError . failure) pure
+  runErrorNoCallStack (runHttpClear bounds (inject action)) >>= either (throwError . failure) pure
   where
     bounds =
-      Http.defaultLimits
+      defaultLimits
         { connectTimeout = Just limits.microseconds
         , idleTimeout = Just limits.microseconds
         , maxBodySize = Just limits.maxBytes
         }
     failure :: HttpFailure -> RoonError
     failure = \case
-      Http.ConnectFailed cause -> ConnectFailed cause
-      Http.RequestFailed ConnectTimedOut -> TimedOut "image"
-      Http.RequestFailed ResponseTimedOut -> TimedOut "image"
-      Http.RequestFailed (BodyTooLarge limit) -> ImageFailed ("the image is larger than " <> Text.pack (show limit) <> " bytes")
-      Http.RequestFailed problem -> ImageFailed (Text.pack (show problem))
-      other -> ImageFailed (Text.pack (show other))
+      H.ConnectFailed cause -> ConnectFailed cause
+      H.RequestFailed ConnectTimedOut -> TimedOut "image"
+      H.RequestFailed ResponseTimedOut -> TimedOut "image"
+      H.RequestFailed (BodyTooLarge limit) -> ImageFailed ("the image is larger than " <> T.pack (show limit) <> " bytes")
+      H.RequestFailed problem -> ImageFailed (T.pack (show problem))
+      other -> ImageFailed (T.pack (show other))

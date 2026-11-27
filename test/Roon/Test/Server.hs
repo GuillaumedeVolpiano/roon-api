@@ -24,22 +24,24 @@ module Roon.Test.Server
   ) where
 
 import Control.Concurrent.Async (wait, withAsync)
-import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
+import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue,
+                               writeTQueue)
 import Data.Aeson (Value (..), object, (.=))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Key (fromText)
+import Data.Aeson.KeyMap qualified as JK (lookup)
 import Data.ByteString (ByteString)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (Map, empty)
 import Data.Text (Text)
-import Effectful
+import Effectful (Eff, IOE, MonadIO (liftIO), runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
 import Roon.Effect.WebSocket (WebSocket, runWebSocketWith)
 import Roon.Error (RoonError)
-import Roon.Moo.Message
-import Roon.Registry
+import Roon.Moo.Message (Body (JsonBody, NoBody), MooMessage (..),
+                         RequestId (RequestId), Verb (Complete, Request),
+                         encode, parse)
+import Roon.Registry (CoreInfo (..), ExtensionInfo (..))
 import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 
 -- Fixtures
@@ -136,12 +138,12 @@ expectRequest wire name = do
 -- | Reply to a request of the client.
 answer :: Wire -> MooMessage -> Verb -> Text -> Body -> IO ()
 answer wire to verb name body =
-  sendToClient wire MooMessage {verb, name, requestId = to.requestId, headers = Map.empty, body}
+  sendToClient wire MooMessage {verb, name, requestId = to.requestId, headers = empty, body}
 
 -- | A request made by the server.
 serverRequest :: Text -> Text -> MooMessage
 serverRequest requestId name =
-  MooMessage {verb = Request, name, requestId = RequestId requestId, headers = Map.empty, body = NoBody}
+  MooMessage {verb = Request, name, requestId = RequestId requestId, headers = empty, body = NoBody}
 
 -- | Answer the info request that opens every registration.
 serveInfo :: Wire -> IO ()
@@ -153,5 +155,5 @@ serveInfo wire = do
 -- | A field of the JSON body of a message.
 field :: Text -> MooMessage -> Maybe Value
 field key message = case message.body of
-  JsonBody (Object fields) -> KeyMap.lookup (Key.fromText key) fields
+  JsonBody (Object fields) -> JK.lookup (fromText key) fields
   _ -> Nothing

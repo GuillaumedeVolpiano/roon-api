@@ -4,14 +4,21 @@ module Roon.BrowseSpec (tests) where
 
 import Control.Monad (replicateM_)
 import Data.Aeson (Value (..), decodeStrictText, object, (.=))
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (empty)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
-import Roon.Browse
+import Roon.Browse (Candidate (..), Hierarchy (Albums, Search),
+                    Item (Item, hint, imageKey, inputPrompt, itemKey, subtitle, title),
+                    ItemHint (ActionList, ListItem), Session (Session),
+                    TrackAction (AddNext, PlayNow, Queue), defaultSearchOptions,
+                    performAction, performTrackAction, searchTracks,
+                    searchTracksConcurrently, session, trackActionTitle)
 import Roon.Effect.Moo (defaultRequestHandler, runMoo)
 import Roon.Error (RoonError (..))
-import Roon.Moo.Message
-import Roon.Test.Server
+import Roon.Moo.Message (Body (JsonBody, NoBody), MooMessage (body, name),
+                         Verb (Complete))
+import Roon.Test.Server (Wire, answer, expectRequest, field, receiveFromClient,
+                         withServer)
 import Roon.Transport (ZoneId (..))
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
@@ -24,7 +31,7 @@ tests =
       [ testCase "searches for tracks in a session" $ do
           let searchSession = Session Search (Just "s")
               client = runMoo defaultRequestHandler (searchTracks defaultSearchOptions searchSession "The Example Band Second Song")
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             search <- expectRequest wire "com.roonlabs.browse:1/browse"
             search.body
               @?= JsonBody
@@ -49,7 +56,7 @@ tests =
             @?= Right [("Second Song", Just "2:0", searchSession)]
       , testCase "finds no track without a category of tracks" $ do
           let client = runMoo defaultRequestHandler (searchTracks defaultSearchOptions (session Search) "nothing")
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             search <- expectRequest wire "com.roonlabs.browse:1/browse"
             answer wire search Complete "Success" listAction
             top <- expectRequest wire "com.roonlabs.browse:1/load"
@@ -58,7 +65,7 @@ tests =
           fmap fst outcome @?= Right []
       , testCase "opens a track down to its actions and queues it" $ do
           let client = runMoo defaultRequestHandler (performTrackAction livingRoom (trackActionTitle Queue) secondSong)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             openTrack <- expectRequest wire "com.roonlabs.browse:1/browse"
             (field "item_key" openTrack, field "zone_or_output_id" openTrack) @?= (Just (String "2:0"), Just (String "zone-1"))
             answer wire openTrack Complete "Success" listAction
@@ -78,7 +85,7 @@ tests =
       , testCase "plays an album through the item that plays the whole of it" $ do
           let album = Candidate {session = Session Albums (Just "s"), item = Item {title = "An Album", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:5", hint = Just ListItem, inputPrompt = Nothing}}
               client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle AddNext) album)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             openAlbum <- expectRequest wire "com.roonlabs.browse:1/browse"
             field "item_key" openAlbum @?= Just (String "1:5")
             answer wire openAlbum Complete "Success" listAction
@@ -96,7 +103,7 @@ tests =
       , testCase "plays an album found by a search, which first opens on itself" $ do
           let album = Candidate {session = Session Search (Just "s"), item = Item {title = "An Album", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:0", hint = Just ListItem, inputPrompt = Nothing}}
               client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle Queue) album)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             openHit <- expectRequest wire "com.roonlabs.browse:1/browse"
             field "item_key" openHit @?= Just (String "1:0")
             answer wire openHit Complete "Success" listAction
@@ -119,7 +126,7 @@ tests =
       , testCase "does not guess among several items that are not the whole" $ do
           let album = Candidate {session = Session Albums (Just "s"), item = Item {title = "Tracks", subtitle = Nothing, imageKey = Nothing, itemKey = Just "1:5", hint = Just ListItem, inputPrompt = Nothing}}
               client = runMoo defaultRequestHandler (performAction livingRoom (trackActionTitle Queue) album)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             open <- expectRequest wire "com.roonlabs.browse:1/browse"
             answer wire open Complete "Success" listAction
             level <- expectRequest wire "com.roonlabs.browse:1/load"
@@ -127,7 +134,7 @@ tests =
           fmap fst outcome @?= Left (BrowseItemMissing "Queue for Tracks")
       , testCase "reports an error message from Roon" $ do
           let client = runMoo defaultRequestHandler (performTrackAction livingRoom (trackActionTitle PlayNow) secondSong)
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withServer empty client $ \wire -> do
             serveActions wire
             play <- expectRequest wire "com.roonlabs.browse:1/browse"
             field "item_key" play @?= Just (String "4:0")
@@ -136,11 +143,11 @@ tests =
           fmap fst outcome @?= Left (BrowseFailed "Zone is not available")
       , testCase "reports an action that is not offered" $ do
           let client = runMoo defaultRequestHandler (performTrackAction livingRoom "Shuffle" secondSong)
-          (outcome, ()) <- withServer Map.empty client serveActions
+          (outcome, ()) <- withServer empty client serveActions
           fmap fst outcome @?= Left (BrowseItemMissing "Shuffle for Second Song")
       , testCase "searches concurrently and reports each query" $ do
           let client = runMoo defaultRequestHandler (searchTracksConcurrently defaultSearchOptions "q-" ["Second Song", "broken"])
-          (outcome, ()) <- withServer Map.empty client $ \wire ->
+          (outcome, ()) <- withServer empty client $ \wire ->
             -- Four requests for the first search, one for the second, in
             -- any order: answer by session.
             replicateM_ 5 $ do

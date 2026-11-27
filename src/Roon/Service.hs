@@ -17,18 +17,17 @@ module Roon.Service
   ) where
 
 import Data.Aeson (FromJSON (..), Value (..), object, (.=))
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.KeyMap (empty)
 import Data.Aeson.Types (Pair, parseEither)
-import Data.Text (Text)
-import Data.Text qualified as Text
-import Effectful
+import Data.Text (Text, pack)
+import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, catchError, throwError)
 import Effectful.Exception (finally)
-import Roon.Effect.Moo (Moo, Reply (..), closeExchange, newSubscriptionKey, nextReply, openExchange, request)
+import Roon.Effect.Moo (Moo, Reply (..), closeExchange, newSubscriptionKey,
+                        nextReply, openExchange, request)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..))
-import Streamly.Data.Stream (Stream)
-import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.Stream (Stream, mapMaybeM, unfoldrM)
 
 -- | Check the status of a reply and decode its JSON body. Takes the
 -- request name, for the error, and the expected status.
@@ -50,7 +49,7 @@ call :: (Moo :> es, Error RoonError :> es) => Text -> Value -> Eff es ()
 call name body = request name (JsonBody body) >>= expectSuccess name
 
 decodeBody :: (FromJSON a, Error RoonError :> es) => Text -> Value -> Eff es a
-decodeBody requestName = either (throwError . UnexpectedReplyBody requestName . Text.pack) pure . parseEither parseJSON
+decodeBody requestName = either (throwError . UnexpectedReplyBody requestName . pack) pure . parseEither parseJSON
 
 -- | Subscribe to a topic of a service, such as the zones of
 -- @com.roonlabs.transport:2@, and consume the replies.
@@ -75,7 +74,7 @@ subscribe service topic arguments consume = do
   key <- newSubscriptionKey
   let withKey = object (("subscription_key" .= key) : arguments)
   exchange <- openExchange (service <> "/subscribe_" <> topic) (JsonBody withKey)
-  consume (Stream.unfoldrM (const (fmap (,()) <$> nextReply exchange)) ())
+  consume (unfoldrM (const (fmap (,()) <$> nextReply exchange)) ())
     `finally` (unsubscribe key >> closeExchange exchange)
   where
     unsubscribe key =
@@ -96,7 +95,7 @@ subscriptionUpdates
   -> (change -> update)
   -> Stream (Eff es) Reply
   -> Stream (Eff es) update
-subscriptionUpdates requestName fromInitial fromChange = Stream.mapMaybeM decode
+subscriptionUpdates requestName fromInitial fromChange = mapMaybeM decode
   where
     decode reply = case reply.name of
       "Subscribed" -> Just . fromInitial <$> replyBody requestName reply
@@ -108,5 +107,5 @@ subscriptionUpdates requestName fromInitial fromChange = Stream.mapMaybeM decode
 replyBody :: (FromJSON a, Error RoonError :> es) => Text -> Reply -> Eff es a
 replyBody requestName reply = case reply.body of
   JsonBody value -> decodeBody requestName value
-  NoBody -> decodeBody requestName (Object KeyMap.empty)
+  NoBody -> decodeBody requestName (Object empty)
   _ -> throwError (UnexpectedReplyBody requestName "not a JSON body")

@@ -5,28 +5,40 @@ module Roon.Effect.WebSocketSpec (tests) where
 import Control.Concurrent.Async (race_, wait, withAsync)
 import Control.Concurrent.STM (atomically, readTQueue, writeTQueue)
 import Control.Exception (bracket)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Aeson (Value (..), object, (.=))
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
-import Data.Text (Text)
-import Data.Text qualified as Text
+import Data.Map.Strict (Map, empty, singleton)
+import Data.Text (Text, isPrefixOf, isSuffixOf)
 import Data.Text.Encoding (encodeUtf8)
-import Effectful
+import Effectful (Eff, IOE, MonadIO (liftIO), runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
-import Network.Socket qualified as Socket
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Stream qualified as Stream
-import Streamly.External.Network.WebSocket.Server qualified as Server
+import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet),
+                       SocketType (Stream), bind, defaultProtocol, socketPort,
+                       tupleToHostAddress)
+import Network.Socket qualified as N (close, socket)
 import Roon.Connection (Reconnect (..), withRoon, withRoonReconnecting)
 import Roon.Effect.Moo (Reply (..), request)
 import Roon.Effect.TokenStore (TokenStore, runTokenStorePure)
-import Roon.Effect.WebSocket (ServerAddress (..), describeFrame, frames, runWebSocketWith, sendFrame, traceFrames)
+import Roon.Effect.WebSocket (ServerAddress (..), describeFrame, frames,
+                              runWebSocketWith, sendFrame, traceFrames)
 import Roon.Error (RoonError (..))
-import Roon.Moo.Message
-import Roon.Registry
-import Roon.Test.Server
+import Roon.Moo.Message (Body (JsonBody, NoBody, RawBody),
+                         MooMessage (MooMessage, body, headers, name, requestId, verb),
+                         RequestId (RequestId),
+                         Verb (Complete, Continue, Request), encode)
+import Roon.Registry (Registration (token))
+import Roon.Test.Server (Wire (toClient, toServer), answer, closeConnection,
+                         expectRequest, extension, field, newWire,
+                         receiveFromClient, registered, sendToClient, serveInfo,
+                         serverRequest)
+import Streamly.Data.Fold (drainMapM)
+import Streamly.Data.Stream (fold, toList)
+import Streamly.External.Network.WebSocket.Server (Connection,
+                                                   Message (BinaryMessage, TextMessage),
+                                                   defaultServerOptions, listen,
+                                                   messages, send, serveSocket)
+import Streamly.External.Network.WebSocket.Server qualified as WSS (close)
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
@@ -38,7 +50,7 @@ tests =
       [ testGroup
           "tracing"
           [ testCase "describes each kind of frame" $ do
-              let frame verb name requestId body = encode MooMessage {verb, name, requestId = RequestId requestId, headers = Map.empty, body}
+              let frame verb name requestId body = encode MooMessage {verb, name, requestId = RequestId requestId, headers = empty, body}
               describeFrame 20 "" @?= "empty frame"
               describeFrame 40 (frame Request "svc:1/get" "3" (JsonBody (object ["a" .= (1 :: Int)])))
                 @?= "REQUEST svc:1/get [3] {\"a\":1}"
@@ -49,29 +61,29 @@ tests =
                 @?= "COMPLETE Success [5] image/jpeg, 3 bytes"
               let unreadable = describeFrame 80 "HTTP/1.1 400 Bad Request\n\n"
               assertBool (show unreadable) $
-                "not a MOO message (" `Text.isPrefixOf` unreadable && "): HTTP/1.1 400 Bad Request\\n\\n" `Text.isSuffixOf` unreadable
+                "not a MOO message (" `isPrefixOf` unreadable && "): HTTP/1.1 400 Bad Request\\n\\n" `isSuffixOf` unreadable
           , testCase "reports the frames of a connection" $ do
               lines' <- newIORef []
-              let reply = encode MooMessage {verb = Complete, name = "Success", requestId = RequestId "0", headers = Map.empty, body = NoBody}
+              let reply = encode MooMessage {verb = Complete, name = "Success", requestId = RequestId "0", headers = empty, body = NoBody}
               inbox <- newIORef [Just reply, Nothing]
               _ <- runEff . runWebSocketWith (\_ -> pure True) (liftIO (atomicModifyIORef' inbox (\case (x : rest) -> (rest, x); [] -> ([], Nothing)))) $
                 traceFrames 80 (\line -> liftIO (modifyIORef' lines' (line :))) $
-                  sendFrame "MOO/1 REQUEST svc:1/ask\nRequest-Id: 0\n\n" >> Stream.toList frames
+                  sendFrame "MOO/1 REQUEST svc:1/ask\nRequest-Id: 0\n\n" >> toList frames
               reverse <$> readIORef lines' >>= (@?= ["-> REQUEST svc:1/ask [0]", "<- COMPLETE Success [0]", "<- connection closed"])
           ]
       , testCase "registers over a real WebSocket" $ do
-          (outcome, ()) <- withLoopbackServer Map.empty (withRoon' pure) $ \wire -> do
+          (outcome, ()) <- withLoopbackServer empty (withRoon' pure) $ \wire -> do
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             sendToClient wire (serverRequest "0" "com.roonlabs.ping:1/ping")
             pong <- receiveFromClient wire
             (pong.verb, pong.name) @?= (Complete, "Success")
             answer wire registerRequest Continue "Registered" (registered "tok-1")
           fmap ((.token) . fst) outcome @?= Right "tok-1"
-          fmap snd outcome @?= Right (Map.singleton "core-1" "tok-1")
+          fmap snd outcome @?= Right (singleton "core-1" "tok-1")
       , testCase "carries a body larger than one network packet" $ do
           let large = RawBody "application/octet-stream" (mconcat (replicate 20_000 "0123456789"))
               client address = withRoon address extension $ \_ -> request "svc:1/echo" large
-          (outcome, ()) <- withLoopbackServer (Map.singleton "core-1" "tok") client $ \wire -> do
+          (outcome, ()) <- withLoopbackServer (singleton "core-1" "tok") client $ \wire -> do
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             answer wire registerRequest Continue "Registered" (registered "tok")
             echo <- expectRequest wire "svc:1/echo"
@@ -80,7 +92,7 @@ tests =
       , testCase "connects again after losing the connection" $ do
           let policy = Reconnect {firstDelay = 1_000, maxDelay = 10_000, maxAttempts = Just 5}
               client address = withRoonReconnecting policy address extension $ \_ -> (.name) <$> request "svc:1/echo" NoBody
-          (outcome, ()) <- withLoopbackServer Map.empty client $ \wire -> do
+          (outcome, ()) <- withLoopbackServer empty client $ \wire -> do
             -- The first connection is lost while the request waits.
             registerRequest <- serveInfo wire >> expectRequest wire "com.roonlabs.registry:1/register"
             answer wire registerRequest Continue "Registered" (registered "tok-1")
@@ -94,13 +106,13 @@ tests =
             answer wire echo Complete "Again" NoBody
           fmap fst outcome @?= Right "Again"
       , testCase "reports the loss when the server closes the connection" $ do
-          (outcome, ()) <- withLoopbackServer Map.empty (withRoon' pure) $ \wire -> do
+          (outcome, ()) <- withLoopbackServer empty (withRoon' pure) $ \wire -> do
             _ <- expectRequest wire "com.roonlabs.registry:1/info"
             closeConnection wire
           fmap fst outcome @?= Left ConnectionLost
       , testCase "reports a refused connection" $ do
           port <- freePort
-          outcome <- runClient Map.empty (withRoon' pure ServerAddress {host = "127.0.0.1", port})
+          outcome <- runClient empty (withRoon' pure ServerAddress {host = "127.0.0.1", port})
           case outcome of
             Left (ConnectFailed _) -> pure ()
             other -> assertFailure ("unexpected outcome: " <> show (fmap fst other))
@@ -122,32 +134,32 @@ withLoopbackServer
   -> IO (Either RoonError (a, Map Text Text), b)
 withLoopbackServer tokens client script = do
   wire <- newWire
-  bracket (Server.listen "127.0.0.1" 0) Socket.close $ \listener -> do
-    port <- fromIntegral <$> Socket.socketPort listener
-    withAsync (Server.serveSocket listener Server.defaultServerOptions (const (bridge wire))) $ \_ ->
+  bracket (listen "127.0.0.1" 0) N.close $ \listener -> do
+    port <- fromIntegral <$> socketPort listener
+    withAsync (serveSocket listener defaultServerOptions (const (bridge wire))) $ \_ ->
       withAsync (script wire) $ \scriptThread -> do
         outcome <- runClient tokens (client ServerAddress {host = "127.0.0.1", port})
         result <- wait scriptThread
         pure (outcome, result)
 
 -- | Serve one connection by moving frames between it and the wire.
-bridge :: Wire -> Server.Connection -> IO ()
+bridge :: Wire -> Connection -> IO ()
 bridge wire connection =
   race_
-    (Stream.fold (Fold.drainMapM (atomically . writeTQueue wire.toServer . bytesOf)) (Server.messages connection))
+    (fold (drainMapM (atomically . writeTQueue wire.toServer . bytesOf)) (messages connection))
     forward
   where
     bytesOf = \case
-      Server.BinaryMessage bytes -> bytes
-      Server.TextMessage text -> encodeUtf8 text
+      BinaryMessage bytes -> bytes
+      TextMessage text -> encodeUtf8 text
     forward =
       atomically (readTQueue wire.toClient) >>= \case
-        Just frame -> Server.send connection (Server.BinaryMessage frame) >> forward
-        Nothing -> Server.close connection
+        Just frame -> send connection (BinaryMessage frame) >> forward
+        Nothing -> WSS.close connection
 
 -- | A port that was free a moment ago.
 freePort :: IO Int
 freePort =
-  bracket (Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol) Socket.close $ \socket -> do
-    Socket.bind socket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
-    fromIntegral <$> Socket.socketPort socket
+  bracket (N.socket AF_INET Stream defaultProtocol) N.close $ \socket -> do
+    bind socket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+    fromIntegral <$> socketPort socket

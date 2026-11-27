@@ -51,29 +51,20 @@ module Roon.Browse
   , performTrackActions
   ) where
 
-import Data.Aeson
-  ( FromJSON (..)
-  , object
-  , withObject
-  , withText
-  , (.:)
-  , (.:?)
-  , (.!=)
-  , (.=)
-  )
+import Data.Aeson (FromJSON (..), object, withObject, withText, (.!=), (.:),
+                   (.:?), (.=))
 import Data.Aeson.Types (Pair)
 import Data.Maybe (catMaybes)
-import Data.Text (Text)
-import Data.Text qualified as Text
-import Effectful
+import Data.Text (Text, isPrefixOf, pack)
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.Streamly.Stream qualified as Concurrent
+import Effectful.Streamly.Stream (ordered, parMapM)
 import Roon.Effect.Moo (Moo, request)
 import Roon.Error (RoonError (..))
 import Roon.Moo.Message (Body (..))
 import Roon.Service (expect)
 import Roon.Transport (ZoneOrOutput (..))
-import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.Stream (fromList, toList)
 
 -- | The name of the browse service, version included.
 browseService :: Text
@@ -359,11 +350,11 @@ searchTracksConcurrently
   -> [Text]
   -> Eff es [(Text, Either RoonError [Candidate])]
 searchTracksConcurrently options prefix queries =
-  Stream.toList $
-    Concurrent.parMapM (Concurrent.ordered True) search (Stream.fromList (zip [0 :: Int ..] queries))
+  toList $
+    parMapM (ordered True) search (fromList (zip [0 :: Int ..] queries))
   where
     search (index, query) =
-      (query,) <$> runErrorNoCallStack (searchTracks options (Session Search (Just (prefix <> Text.pack (show index)))) query)
+      (query,) <$> runErrorNoCallStack (searchTracks options (Session Search (Just (prefix <> pack (show index)))) query)
 
 -- Acting on a track
 
@@ -432,7 +423,7 @@ performAction target actionTitle candidate = case candidate.item.itemKey of
           | level.list.hint == Just ActionListHint -> missing
           | otherwise -> case [(title, next) | Item {title, hint = Just ActionList, itemKey = Just next} <- level.items] of
               [(_, next)] -> descend (depth - 1) next
-              (title, next) : _ | "Play " `Text.isPrefixOf` title -> descend (depth - 1) next
+              (title, next) : _ | "Play " `isPrefixOf` title -> descend (depth - 1) next
               -- An album found by a search opens on a level that holds
               -- only itself, as a list, before its tracks.
               [] | [Item {hint = Just ListItem, itemKey = Just next}] <- level.items -> descend (depth - 1) next

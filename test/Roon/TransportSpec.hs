@@ -6,16 +6,38 @@ module Roon.TransportSpec (tests) where
 
 import Data.Aeson (Value (..), decodeStrictText, object, (.=))
 import Data.List (sort, sortOn)
-import Data.Map.Strict qualified as Map
+import Data.Map.Strict (empty, keys, singleton)
+import Data.Map.Strict qualified as M (lookup)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Roon.Effect.Moo (defaultRequestHandler, runMoo)
 import Roon.Error (RoonError (..))
-import Roon.Moo.Message
-import Roon.Test.Server
-import Roon.Transport
-import Streamly.Data.Fold qualified as Fold
-import Streamly.Data.Stream qualified as Stream
+import Roon.Moo.Message (Body (JsonBody, NoBody), MooMessage (body, name),
+                         Verb (Complete, Continue))
+import Roon.Test.Server (answer, expectRequest, field, receiveFromClient,
+                         withServer)
+import Roon.Transport (Control (Next, Play), DisplayLines (DisplayLines),
+                       Loop (LoopDisabled), LoopChange (NextLoop),
+                       NowPlaying (..), Output (..), OutputId (OutputId),
+                       PlaybackState (Paused), QueueChange (OtherQueueChange),
+                       QueueEvent (QueueChanged, QueueSubscribed),
+                       QueueItem (..),
+                       SeekChange (SeekChange, queueTimeRemaining, seekPosition, zoneId),
+                       SettingsChange (setLoop, setShuffle),
+                       SourceControl (SourceControl, controlKey, displayName, status, supportsStandby),
+                       SourceControlStatus (Indeterminate),
+                       TransportEvent (QueueUpdate, ZoneUpdate), Zone (..),
+                       ZoneChanges (ZoneChanges, added, changed, removed, seekChanged),
+                       ZoneEvent (..), ZoneId (..),
+                       ZoneSettings (ZoneSettings, autoRadio, loop, shuffle),
+                       applyQueueEvent, changeSettings, control, getOutputs,
+                       getZones, noSettingsChange, queue, subscribeQueue,
+                       subscribeTransport, subscribeZones, zoneViews,
+                       zoneViewsEvery, zones)
+import Streamly.Data.Fold (drain)
+import Streamly.Data.Fold qualified as F (length, one)
+import Streamly.Data.Stream (fold, fromList, toList)
+import Streamly.Data.Stream qualified as S (take)
 import Test.Tasty (TestTree, localOption, mkTimeout, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
@@ -25,31 +47,31 @@ tests =
     testGroup
       "Roon.Transport"
       [ testCase "decodes the zones of a real server" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler getZones) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler getZones) $ \wire -> do
             question <- expectRequest wire "com.roonlabs.transport:2/get_zones"
             answer wire question Complete "Success" (JsonBody realZones)
           fmap fst outcome @?= Right [livingRoom]
       , testCase "decodes the outputs of a real server" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler getOutputs) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler getOutputs) $ \wire -> do
             question <- expectRequest wire "com.roonlabs.transport:2/get_outputs"
             answer wire question Complete "Success" (JsonBody (object ["outputs" .= [realOutput]]))
           fmap fst outcome @?= Right [livingRoomOutput]
       , testCase "operates a zone" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler (control livingRoom.zoneId Next)) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler (control livingRoom.zoneId Next)) $ \wire -> do
             question <- expectRequest wire "com.roonlabs.transport:2/control"
             field "zone_or_output_id" question @?= Just (String "zone-0001")
             field "control" question @?= Just (String "next")
             answer wire question Complete "Success" NoBody
           fmap fst outcome @?= Right ()
       , testCase "reports a refused control" $ do
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler (control livingRoomOutput.outputId Play)) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler (control livingRoomOutput.outputId Play)) $ \wire -> do
             question <- expectRequest wire "com.roonlabs.transport:2/control"
             field "zone_or_output_id" question @?= Just (String "output-0001")
             answer wire question Complete "InvalidRequest" NoBody
           fmap fst outcome @?= Left (UnexpectedReply "com.roonlabs.transport:2/control" "InvalidRequest")
       , testCase "changes only the settings asked for" $ do
           let change = noSettingsChange {setShuffle = Just True, setLoop = Just NextLoop}
-          (outcome, ()) <- withServer Map.empty (runMoo defaultRequestHandler (changeSettings livingRoom.zoneId change)) $ \wire -> do
+          (outcome, ()) <- withServer empty (runMoo defaultRequestHandler (changeSettings livingRoom.zoneId change)) $ \wire -> do
             question <- expectRequest wire "com.roonlabs.transport:2/change_settings"
             question.body
               @?= JsonBody
@@ -62,8 +84,8 @@ tests =
             answer wire question Complete "Success" NoBody
           fmap fst outcome @?= Right ()
       , testCase "follows the zones, then unsubscribes with the same key" $ do
-          let client = runMoo defaultRequestHandler (subscribeZones (Stream.fold zones . Stream.take 3))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeZones (fold zones . S.take 3))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_zones"
             let key = field "subscription_key" subscription
             key @?= Just (Number 0)
@@ -78,22 +100,22 @@ tests =
             field "subscription_key" unsubscription @?= key
             answer wire unsubscription Complete "Success" NoBody
           let seeked = let Zone {..} = livingRoom in Zone {nowPlaying = atSeek 100 <$> nowPlaying, queueTimeRemaining = Just 2152, ..}
-          fmap fst outcome @?= Right (Map.singleton livingRoom.zoneId seeked)
+          fmap fst outcome @?= Right (singleton livingRoom.zoneId seeked)
       , testCase "gives a view of the zones after each event" $ do
-          views <- Stream.toList (zoneViews (Stream.fromList zoneScript))
-          map Map.keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId, kitchen], [livingRoom.zoneId, kitchen]]
+          views <- toList (zoneViews (fromList zoneScript))
+          map keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId], [livingRoom.zoneId, kitchen], [livingRoom.zoneId, kitchen]]
       , testCase "holds back views that only move the seek position" $ do
-          views <- Stream.toList (zoneViewsEvery 3600 (Stream.fromList zoneScript))
+          views <- toList (zoneViewsEvery 3600 (fromList zoneScript))
           -- The subscription, then the new zone, which carries the
           -- positions held back.
-          map Map.keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId, kitchen]]
-          fmap (.nowPlaying) (Map.lookup livingRoom.zoneId (last views)) @?= Just (atSeek 120 <$> livingRoom.nowPlaying)
+          map keys views @?= [[livingRoom.zoneId], [livingRoom.zoneId, kitchen]]
+          fmap (.nowPlaying) (M.lookup livingRoom.zoneId (last views)) @?= Just (atSeek 120 <$> livingRoom.nowPlaying)
       , testCase "gives every view when the interval is zero" $ do
-          views <- Stream.toList (zoneViewsEvery 0 (Stream.fromList zoneScript))
+          views <- toList (zoneViewsEvery 0 (fromList zoneScript))
           length views @?= length zoneScript
       , testCase "ends the stream when the server ends the subscription" $ do
-          let client = runMoo defaultRequestHandler (subscribeZones (Stream.fold Fold.length))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeZones (fold F.length))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_zones"
             answer wire subscription Continue "Subscribed" (JsonBody realZones)
             answer wire subscription Complete "Unsubscribed" NoBody
@@ -101,16 +123,16 @@ tests =
             pure ()
           fmap fst outcome @?= Right 1
       , testCase "reports an unexpected subscription status" $ do
-          let client = runMoo defaultRequestHandler (subscribeZones (Stream.fold Fold.drain))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeZones (fold drain))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_zones"
             answer wire subscription Complete "NotAllowed" NoBody
             _ <- expectRequest wire "com.roonlabs.transport:2/unsubscribe_zones"
             pure ()
           fmap fst outcome @?= Left (UnexpectedReply "com.roonlabs.transport:2/subscribe_zones" "NotAllowed")
       , testCase "follows zones and queues as one stream" $ do
-          let client = runMoo defaultRequestHandler (subscribeTransport [livingRoom.zoneId] 2 (Stream.toList . Stream.take 2))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeTransport [livingRoom.zoneId] 2 (toList . S.take 2))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             zoneSubscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_zones"
             queueSubscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_queue"
             answer wire queueSubscription Continue "Subscribed" (JsonBody realQueue)
@@ -121,8 +143,8 @@ tests =
           fmap (sortOn show . fst) outcome
             @?= Right (sortOn show [QueueUpdate livingRoom.zoneId (QueueSubscribed [firstSong, secondSong]), ZoneUpdate (ZonesSubscribed [livingRoom])])
       , testCase "reads the first items of a queue" $ do
-          let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 2 (Stream.fold Fold.one))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 2 (fold F.one))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_queue"
             field "zone_or_output_id" subscription @?= Just (String "zone-0001")
             field "max_item_count" subscription @?= Just (Number 2)
@@ -131,8 +153,8 @@ tests =
             pure ()
           fmap fst outcome @?= Right (Just (QueueSubscribed [firstSong, secondSong]))
       , testCase "follows a queue through a real change" $ do
-          let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 5 (Stream.fold queue . Stream.take 2))
-          (outcome, ()) <- withServer Map.empty client $ \wire -> do
+          let client = runMoo defaultRequestHandler (subscribeQueue livingRoom.zoneId 5 (fold queue . S.take 2))
+          (outcome, ()) <- withServer empty client $ \wire -> do
             subscription <- expectRequest wire "com.roonlabs.transport:2/subscribe_queue"
             answer wire subscription Continue "Subscribed" (JsonBody capturedQueue)
             answer wire subscription Continue "Changed" (JsonBody capturedQueueChange)

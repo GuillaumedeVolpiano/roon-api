@@ -23,32 +23,24 @@ module Roon.Effect.TokenStore
   , runTokenStorePure
   ) where
 
-import Data.Aeson ((.:), (.=))
-import Data.Aeson qualified as Aeson
-import Data.Aeson.Types qualified as Aeson
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
-import Data.Text (Text)
-import Data.Text qualified as Text
-import Effectful
+import Data.Aeson (decodeStrict, encode, object, withObject, (.:), (.=))
+import Data.Aeson.Types (parseMaybe)
+import Data.Map.Strict (Map, empty, insert)
+import Data.Map.Strict qualified as M (lookup)
+import Data.Text (Text, unpack)
+import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, type (:>))
 import Effectful.Dispatch.Dynamic (interpret_, reinterpret_, send)
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Exception (bracketOnError)
-import Effectful.FileSystem
-  ( FileSystem
-  , XdgDirectory (XdgState)
-  , createDirectoryIfMissing
-  , doesFileExist
-  , getXdgDirectory
-  , removeFile
-  , renameFile
-  )
+import Effectful.FileSystem (FileSystem, XdgDirectory (XdgState),
+                             createDirectoryIfMissing, doesFileExist,
+                             getXdgDirectory, removeFile, renameFile)
 import Effectful.FileSystem.IO (Handle, hClose)
-import Effectful.FileSystem.IO.ByteString qualified as ByteString
-import Effectful.FileSystem.IO.ByteString.Lazy qualified as LazyByteString
+import Effectful.FileSystem.IO.ByteString qualified as FS (readFile)
+import Effectful.FileSystem.IO.ByteString.Lazy (hPut)
 import Effectful.State.Static.Local (gets, modify, runState)
 import System.FilePath (takeDirectory, (<.>), (</>))
-import System.IO qualified as IO
+import System.IO qualified as IO (openBinaryTempFile)
 
 -- | Remember the token that each server gave to this extension.
 data TokenStore :: Effect where
@@ -72,34 +64,34 @@ saveToken coreId token = send (SaveToken coreId token)
 -- to enable the extension in Roon once more.
 runTokenStoreFile :: FileSystem :> es => FilePath -> Eff (TokenStore : es) a -> Eff es a
 runTokenStoreFile path = interpret_ $ \case
-  LoadToken coreId -> Map.lookup coreId <$> readTokens path
+  LoadToken coreId -> M.lookup coreId <$> readTokens path
   SaveToken coreId token -> do
     tokens <- readTokens path
-    writeTokens path (Map.insert coreId token tokens)
+    writeTokens path (insert coreId token tokens)
 
 -- | The conventional place for the tokens of an extension:
 -- @$XDG_STATE_HOME\/roon-api\/\<extension id\>.json@.
 defaultTokenFile :: FileSystem :> es => Text -> Eff es FilePath
 defaultTokenFile extensionId = do
   directory <- getXdgDirectory XdgState "roon-api"
-  pure (directory </> Text.unpack extensionId <.> "json")
+  pure (directory </> unpack extensionId <.> "json")
 
 -- | Keep the tokens in memory, starting from the given ones. Returns the
 -- tokens held at the end. Meant for tests.
 runTokenStorePure :: Map Text Text -> Eff (TokenStore : es) a -> Eff es (a, Map Text Text)
 runTokenStorePure initial = reinterpret_ (runState initial) $ \case
-  LoadToken coreId -> gets (Map.lookup coreId)
-  SaveToken coreId token -> modify (Map.insert coreId token)
+  LoadToken coreId -> gets (M.lookup coreId)
+  SaveToken coreId token -> modify (insert coreId token)
 
 readTokens :: FileSystem :> es => FilePath -> Eff es (Map Text Text)
 readTokens path = do
   exists <- doesFileExist path
   if not exists
-    then pure Map.empty
+    then pure empty
     else do
-      contents <- ByteString.readFile path
-      pure . maybe Map.empty id $
-        Aeson.decodeStrict contents >>= Aeson.parseMaybe (Aeson.withObject "token file" (.: "tokens"))
+      contents <- FS.readFile path
+      pure . maybe empty id $
+        decodeStrict contents >>= parseMaybe (withObject "token file" (.: "tokens"))
 
 writeTokens :: FileSystem :> es => FilePath -> Map Text Text -> Eff es ()
 writeTokens path tokens = do
@@ -110,7 +102,7 @@ writeTokens path tokens = do
     (openBinaryTempFile directory "tokens.tmp")
     (\(temporary, handle) -> hClose handle >> removeFile temporary)
     ( \(temporary, handle) -> do
-        LazyByteString.hPut handle (Aeson.encode (Aeson.object ["tokens" .= tokens]))
+        hPut handle (encode (object ["tokens" .= tokens]))
         hClose handle
         renameFile temporary path
     )

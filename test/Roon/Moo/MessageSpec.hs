@@ -2,29 +2,19 @@ module Roon.Moo.MessageSpec (tests) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
-import Data.Map.Strict qualified as Map
+import Data.ByteString qualified as BS (pack)
+import Data.Map.Strict (empty, fromList, singleton)
 import Data.Text (Text)
-import Data.Text qualified as Text
-import Roon.Moo.Message
+import Data.Text qualified as T (dropWhile, pack)
+import Roon.Moo.Message (Body (..), MooMessage (..),
+                         MooParseError (ContentTypeWithoutLength, InvalidContentLength, InvalidJson, MalformedHeader, MissingContentType, MissingHeaderEnd, MissingRequestId, TruncatedBody, UnexpectedBody, UnknownVerb),
+                         RequestId (RequestId), Verb (..), encode, parse,
+                         splitServiceMethod)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import Test.Tasty.QuickCheck
-  ( Gen
-  , arbitrary
-  , chooseInt
-  , counterexample
-  , elements
-  , forAll
-  , frequency
-  , listOf
-  , listOf1
-  , oneof
-  , suchThat
-  , testProperty
-  , vectorOf
-  , (===)
-  )
+import Test.Tasty.QuickCheck (Gen, arbitrary, chooseInt, counterexample,
+                              elements, forAll, frequency, listOf, listOf1,
+                              oneof, suchThat, testProperty, vectorOf, (===))
 
 tests :: TestTree
 tests =
@@ -66,7 +56,7 @@ parseTests =
         @?= Right (message Continue "Registered" "1" (JsonBody (object ["core_id" .= ("abc" :: Text)])))
   , testCase "extra headers are kept, the three known ones are not" $
       parse "MOO/1 REQUEST com.roonlabs.ping:1/ping\nRequest-Id: 4\nLogging: quiet\n\n"
-        @?= Right (message Request "com.roonlabs.ping:1/ping" "4" NoBody) {headers = Map.singleton "Logging" "quiet"}
+        @?= Right (message Request "com.roonlabs.ping:1/ping" "4" NoBody) {headers = singleton "Logging" "quiet"}
   , testCase "header values may omit the space after the colon" $
       parse "MOO/1 COMPLETE Success\nRequest-Id:5\n\n"
         @?= Right (message Complete "Success" "5" NoBody)
@@ -126,7 +116,7 @@ rejectTests =
 
 message :: Verb -> Text -> Text -> Body -> MooMessage
 message verb name rid body =
-  MooMessage {verb, name, requestId = RequestId rid, headers = Map.empty, body}
+  MooMessage {verb, name, requestId = RequestId rid, headers = empty, body}
 
 -- Generators. They only produce messages that the format can represent:
 -- no line feed in a line, no leading space in a header value, a non-empty
@@ -137,7 +127,7 @@ genMessage = do
   verb <- elements [minBound .. maxBound]
   name <- genLine
   requestId <- RequestId <$> genToken
-  headers <- Map.fromList <$> listOf ((,) <$> genHeaderName <*> genHeaderValue)
+  headers <- fromList <$> listOf ((,) <$> genHeaderName <*> genHeaderValue)
   body <- genBody
   pure MooMessage {verb, name, requestId, headers, body}
 
@@ -156,18 +146,18 @@ genBytes = do
 
 -- | Any text that fits on a line.
 genLine :: Gen Text
-genLine = Text.pack <$> listOf (genChar `suchThat` (/= '\n'))
+genLine = T.pack <$> listOf (genChar `suchThat` (/= '\n'))
 
 genToken :: Gen Text
-genToken = Text.pack <$> listOf1 (elements (['a' .. 'z'] <> ['0' .. '9']))
+genToken = T.pack <$> listOf1 (elements (['a' .. 'z'] <> ['0' .. '9']))
 
 genHeaderName :: Gen Text
 genHeaderName = genName `suchThat` (`notElem` ["Request-Id", "Content-Length", "Content-Type"])
   where
-    genName = Text.pack <$> listOf1 (elements (['A' .. 'Z'] <> ['a' .. 'z'] <> "-"))
+    genName = T.pack <$> listOf1 (elements (['A' .. 'Z'] <> ['a' .. 'z'] <> "-"))
 
 genHeaderValue :: Gen Text
-genHeaderValue = Text.dropWhile (== ' ') <$> genLine
+genHeaderValue = T.dropWhile (== ' ') <$> genLine
 
 genChar :: Gen Char
 genChar = oneof [elements (['a' .. 'z'] <> " :/.-_{}\""), elements "éß→音", arbitrary `suchThat` (\c -> c < '\xD800' || c > '\xDFFF')]
