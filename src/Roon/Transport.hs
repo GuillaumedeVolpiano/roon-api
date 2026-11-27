@@ -104,15 +104,18 @@ import Streamly.Data.Scanl qualified as Scanl
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
 
+-- | The name of the transport service, version included.
 transportService :: Text
 transportService = "com.roonlabs.transport:2"
 
 -- Identifiers
 
+-- | What names a zone in Roon.
 newtype ZoneId = ZoneId Text
   deriving stock (Show)
   deriving newtype (Eq, Ord, FromJSON, ToJSON)
 
+-- | What names an output in Roon.
 newtype OutputId = OutputId Text
   deriving stock (Show)
   deriving newtype (Eq, Ord, FromJSON, ToJSON)
@@ -130,6 +133,7 @@ instance ZoneOrOutput OutputId where
 
 -- Zones and outputs
 
+-- | Where music plays: one output, or several grouped together.
 data Zone = Zone
   { zoneId :: ZoneId
   , displayName :: Text
@@ -178,6 +182,7 @@ instance FromJSON PlaybackState where
     "stopped" -> pure Stopped
     other -> pure (OtherState other)
 
+-- | The playback options of a zone.
 data ZoneSettings = ZoneSettings
   { loop :: Loop
   , shuffle :: Bool
@@ -189,6 +194,8 @@ instance FromJSON ZoneSettings where
   parseJSON = withObject "ZoneSettings" $ \fields ->
     ZoneSettings <$> fields .: "loop" <*> fields .: "shuffle" <*> fields .: "auto_radio"
 
+-- | Whether playback repeats: the whole queue, the current track, or
+-- nothing. 'OtherLoop' keeps a value this library does not know.
 data Loop = LoopQueue | LoopOne | LoopDisabled | OtherLoop Text
   deriving stock (Eq, Show)
 
@@ -199,6 +206,7 @@ instance FromJSON Loop where
     "disabled" -> pure LoopDisabled
     other -> pure (OtherLoop other)
 
+-- | What a zone is playing.
 data NowPlaying = NowPlaying
   { seekPosition :: Maybe Int
   -- ^ In seconds.
@@ -236,6 +244,7 @@ instance FromJSON DisplayLines where
   parseJSON = withObject "DisplayLines" $ \fields ->
     DisplayLines <$> fields .: "line1" <*> fields .:? "line2" <*> fields .:? "line3"
 
+-- | A device, or an endpoint, that plays the audio of a zone.
 data Output = Output
   { outputId :: OutputId
   , zoneId :: ZoneId
@@ -310,6 +319,8 @@ instance FromJSON SourceControl where
       <*> fields .: "status"
       <*> fields .:? "supports_standby" .!= False
 
+-- | The state of a source control. 'OtherStatus' keeps a value this
+-- library does not know.
 data SourceControlStatus = Selected | Deselected | Standby | Indeterminate | OtherStatus Text
   deriving stock (Eq, Show)
 
@@ -351,6 +362,7 @@ data ZoneEvent
   | ZonesChanged ZoneChanges
   deriving stock (Eq, Show)
 
+-- | What changed since the last message of a subscription to the zones.
 data ZoneChanges = ZoneChanges
   { removed :: [ZoneId]
   , added :: [Zone]
@@ -369,6 +381,8 @@ instance FromJSON ZoneChanges where
       <*> fields .:? "zones_changed" .!= []
       <*> fields .:? "zones_seek_changed" .!= []
 
+-- | The new position of a zone that plays, in seconds, and the time
+-- its queue still holds.
 data SeekChange = SeekChange
   { zoneId :: ZoneId
   , seekPosition :: Maybe Int
@@ -438,6 +452,7 @@ zoneViewsEvery interval =
 
 -- The queue
 
+-- | An item of the queue of a zone.
 data QueueItem = QueueItem
   { queueItemId :: Int
   , length :: Maybe Int
@@ -553,6 +568,7 @@ playFromHere target queueItemId =
 
 -- Controls
 
+-- | What to tell a zone about its playback.
 data Control
   = -- | Start playback if paused or stopped.
     Play
@@ -583,6 +599,7 @@ control target which =
   call (method "control") $
     object ["zone_or_output_id" .= zoneOrOutputId target, "control" .= controlName which]
 
+-- | Pause every zone.
 pauseAll :: (Moo :> es, Error RoonError :> es) => Eff es ()
 pauseAll = call (method "pause_all") (object [])
 
@@ -590,6 +607,7 @@ pauseAll = call (method "pause_all") (object [])
 data Seek = SeekTo Int | SeekBy Int
   deriving stock (Eq, Show)
 
+-- | Move within the current track.
 seek :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es) => target -> Seek -> Eff es ()
 seek target position =
   call (method "seek") . object $
@@ -605,12 +623,15 @@ data SettingsChange = SettingsChange
   }
   deriving stock (Eq, Show)
 
+-- | Set the loop mode, or go to the next one in Roon's order.
 data LoopChange = SetLoop Loop | NextLoop
   deriving stock (Eq, Show)
 
+-- | Change nothing: the value to update with the settings to change.
 noSettingsChange :: SettingsChange
 noSettingsChange = SettingsChange {setShuffle = Nothing, setAutoRadio = Nothing, setLoop = Nothing}
 
+-- | Change the playback options of a zone.
 changeSettings :: (ZoneOrOutput target, Moo :> es, Error RoonError :> es) => target -> SettingsChange -> Eff es ()
 changeSettings target change =
   call (method "change_settings") . object $
@@ -629,6 +650,7 @@ changeSettings target change =
       SetLoop LoopDisabled -> "disabled"
       SetLoop (OtherLoop name) -> name
 
+-- | How to change the volume of an output.
 data VolumeChange
   = -- | Set the volume, in the units of the output.
     VolumeTo Double
@@ -638,6 +660,8 @@ data VolumeChange
     RelativeStep Int
   deriving stock (Eq, Show)
 
+-- | Change the volume of an output. Only for the outputs whose volume
+-- Roon controls: the others have no @volume@.
 changeVolume :: (Moo :> es, Error RoonError :> es) => OutputId -> VolumeChange -> Eff es ()
 changeVolume outputId change =
   call (method "change_volume") . object $

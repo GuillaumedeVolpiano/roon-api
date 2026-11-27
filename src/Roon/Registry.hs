@@ -89,6 +89,7 @@ instance FromJSON Registration where
       )
       value
 
+-- | The name of the registry service, version included.
 registryService :: Text
 registryService = "com.roonlabs.registry:1"
 

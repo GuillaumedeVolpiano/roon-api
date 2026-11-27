@@ -75,6 +75,7 @@ import Roon.Service (expect)
 import Roon.Transport (ZoneOrOutput (..))
 import Streamly.Data.Stream qualified as Stream
 
+-- | The name of the browse service, version included.
 browseService :: Text
 browseService = "com.roonlabs.browse:1"
 
@@ -158,6 +159,7 @@ instance FromJSON ListHint where
     "action_list" -> pure ActionListHint
     other -> pure (OtherListHint other)
 
+-- | An item of a list.
 data Item = Item
   { title :: Text
   , subtitle :: Maybe Text
@@ -181,6 +183,7 @@ instance FromJSON Item where
       <*> fields .:? "hint"
       <*> fields .:? "input_prompt"
 
+-- | What selecting an item does.
 data ItemHint
   = -- | Selecting the item does something, such as playing.
     Action
@@ -201,6 +204,8 @@ instance FromJSON ItemHint where
     "header" -> pure Header
     other -> pure (OtherItemHint other)
 
+-- | The input an item asks for before it opens, such as the text of a
+-- search.
 data InputPrompt = InputPrompt
   { prompt :: Text
   , action :: Text
@@ -284,6 +289,7 @@ browse current target navigation =
           <> navigationFields navigation
           <> catMaybes [("zone_or_output_id" .=) . zoneOrOutputId <$> target]
 
+-- | A part of a list: the list, where the part starts, and its items.
 data LoadResult = LoadResult
   { list :: List
   , offset :: Int
@@ -311,6 +317,7 @@ data Candidate = Candidate
   }
   deriving stock (Eq, Show)
 
+-- | How to read the results of a search for tracks.
 data SearchOptions = SearchOptions
   { tracksTitle :: Text
   -- ^ The title of the category of tracks in the results.
@@ -360,6 +367,7 @@ searchTracksConcurrently options prefix queries =
 
 -- Acting on a track
 
+-- | What can be done with a track.
 data TrackAction = PlayNow | AddNext | Queue | StartRadio
   deriving stock (Eq, Show, Enum, Bounded)
 

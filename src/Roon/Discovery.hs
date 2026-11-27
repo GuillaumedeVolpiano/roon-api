@@ -140,6 +140,7 @@ coreFromAnswer sender SoodMessage {kind, properties}
       Just (Just value) -> Just value
       _ -> Nothing
 
+-- | Where to look for servers, and for how long.
 data DiscoveryOptions = DiscoveryOptions
   { targets :: [(Socket.HostAddress, Socket.PortNumber)]
   -- ^ Where to send the query.
