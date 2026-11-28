@@ -1,6 +1,6 @@
 cabal-version:   3.12
 name:            roon-api
-version:         0.2.0.5
+version:         0.1.0.0
 synopsis:        Client library for the Roon extension API
 description:
   An independent, unofficial Haskell implementation of the protocol that
@@ -13,8 +13,8 @@ description:
 homepage:        https://github.com/GuillaumedeVolpiano/roon-api
 license:         BSD-3-Clause
 license-file:    LICENSE
-author:          GuillaumedeVolpiano
-maintainer:      xavier@wheredoibegin.fr
+author:          Xavier Dectot
+maintainer:      Xavier Dectot <xavier@wheredoibegin.fr>
 category:        Sound, Network
 build-type:      Simple
 tested-with:     GHC ==9.8.4 || ==9.10.3 || ==9.12.4
@@ -129,7 +129,7 @@ test-suite roon-api-test
     , streamly-core
     , temporary         ^>=1.3
     , unix              ^>=2.8
-    , streamly-websockets ^>=0.3
+    , streamly-websockets ^>=0.1
     , text
     , tasty             ^>=1.5
     , tasty-hunit       ^>=0.10
@@ -155,7 +155,7 @@ benchmark roon-api-bench
     , scientific           ^>=0.3
     , streamly-bytestring
     , streamly-core
-    , streamly-http        ^>=0.3
+    , streamly-http        ^>=0.1
     , tasty-bench          >=0.4 && <0.6
     , tasty-hunit
     , text

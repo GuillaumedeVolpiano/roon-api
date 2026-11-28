@@ -1,82 +1,16 @@
 # Revision history for roon-api
 
-## 0.2.0.5 -- 2026-11-27
+## 0.1.0.0 -- 2026-11-28
 
-* The benchmark takes `foldl'` from `Data.List` again: 0.2.0.4 had lost
-  that import, and the benchmark no longer built with GHC 9.8.
-
-## 0.2.0.4 -- 2026-11-27
-
-* No change of interface. The dependency bounds are stated once in the
-  cabal file, and the imports list the names they use.
-
-## 0.2.0.3 -- 2026-11-27
-
-* Builds with GHC 9.8 and 9.10 as well as 9.12: the language is GHC2021
-  with the extensions GHC2024 adds, and the bounds on `base` and on the
-  libraries that come with the compiler are wider.
-* The fixtures of the tests are ordinary strings, and the benchmark takes
-  `foldl'` from `Data.List`, for the same compilers.
-* Every exported name is documented.
-* The links of the documentation say which name they mean, where a type
-  and its constructor, or two modules, share one.
-
-## 0.2.0.2 -- 2026-11-21
-
-* The header block of a MOO message and SOOD datagrams are read with
-  flatparse: a whole message is parsed in about nine microseconds instead
-  of fourteen.
-* `cabal bench` measures the parsers of the hot paths.
-
-## 0.2.0.1 -- 2026-11-21
-
-* `performAction` plays an album found by a search: such an album first
-  opens on a level that holds only itself.
-
-## 0.2.0.0 -- 2026-11-21
-
-* `Roon.Image` asks for images through the `Http` effect of
-  effectful-streamly-http: `fetchImage` no longer needs `IOE`, and tests
-  answer from a function. `runImageHttp` reaches the server, within
-  `ImageLimits`; `fetchImageWithin` is gone. The time limit now bounds each
-  wait, not the whole exchange.
-* `performAction` plays an album, a playlist or anything else Roon offers
-  actions for, not only a track.
-* `roon-probe browse HIERARCHY [TITLE...]` walks the library without
-  playing anything.
-* `roon-probe` gives Roon the version of this package.
-* Built on effectful-streamly-http 0.1 and effectful-websockets 0.1.1.
-
-## 0.1.0.0 -- 2026-11-21
-
-* MOO message format: types, encoder and parser (`Roon.Moo.Message`).
-* WebSocket transport with ping and pong (`Roon.Effect.WebSocket`), over
-  `effectful-websockets`, and a trace of the MOO frames (`traceFrames`).
-* Requests and subscriptions multiplexed over one connection, and replies
-  to the requests of the server in a thread of their own
-  (`Roon.Effect.Moo`).
-* Time limits: 30 seconds per reply by default for requests
-  (`requestWithin` to change it), none for registration unless asked
-  (`registerWithin`).
-* Extension registration (`Roon.Registry`) with token persistence
-  (`Roon.Effect.TokenStore`).
-* Discovery of Roon Servers on the local network, by SOOD
-  (`Roon.Discovery`), over `streamly-network-udp`.
-* `withRoon` to connect and register in one step, and
-  `withRoonReconnecting` to connect again, with a growing delay, when the
-  connection is lost or refused (`Roon.Connection`).
-* Transport service (`Roon.Transport`): zones and outputs, zone and queue
-  subscriptions, playback, seek, settings, volume and mute controls, zone
-  transfer. Views of the zones and of a queue kept up to date from their
-  subscriptions, with seek moves held back on request (`zoneViewsEvery`).
-  Zones and queues followed as one stream (`subscribeTransport`).
-* Browse service (`Roon.Browse`): browsing and loading in sessions of
-  their own, track searches run concurrently with a report for each query,
-  and the actions on a track (Play Now, Add Next, Queue, Start Radio).
-* Images fetched over HTTP by their key, in a size and a format asked for,
-  within limits of time and size (`Roon.Image`), over `streamly-http`.
-* Building blocks shared by services, among them the subscription
-  convention with its unsubscription (`Roon.Service`).
-* `roon-probe`, a smoke test against a real server; it lists the zones, and
-  describes every frame when `ROON_TRACE` is set; `roon-probe discover`
-  lists the servers on the network; `roon-probe image` saves an image.
+* First release on Hackage.
+* MOO messages (`Roon.Moo.Message`), and requests and subscriptions over
+  one WebSocket with keep-alive (`Roon.Effect.Moo`, `Roon.Effect.WebSocket`).
+* Discovery of the Roon Servers of the local network (`Roon.Discovery`).
+* Registration of an extension, its token kept from one run to the next
+  (`Roon.Registry`, `Roon.Effect.TokenStore`, `Roon.Connection`).
+* The transport service (`Roon.Transport`): zones and outputs, their
+  changes, the queue, playback, seek, settings, volume and mute.
+* The browse service (`Roon.Browse`): sessions, lists, the search for
+  tracks, and the actions Roon offers on tracks, albums and playlists.
+* Images over HTTP (`Roon.Image`).
+* `roon-probe`, a program to try the library against a server.
