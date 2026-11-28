@@ -27,17 +27,13 @@ Early work in progress. Nothing here is stable yet.
     cabal build all
     cabal test
 
-roon-api depends on
-[effectful-streamly](https://github.com/GuillaumedeVolpiano/effectful-streamly),
-[effectful-streamly-http](https://github.com/GuillaumedeVolpiano/effectful-streamly-http),
-[effectful-websockets](https://github.com/GuillaumedeVolpiano/effectful-websockets),
-[streamly-http](https://github.com/GuillaumedeVolpiano/streamly-http),
-[streamly-network-udp](https://github.com/GuillaumedeVolpiano/streamly-network-udp)
-and, through effectful-websockets,
-[streamly-websockets](https://github.com/GuillaumedeVolpiano/streamly-websockets),
-not yet on Hackage. `cabal.project` fetches them
-from GitHub, at their releases. To build against copies checked out next to
-this repository instead, pass `--project-file=cabal.project.siblings`.
+To build against copies of the libraries this package is built on
+([effectful-streamly](https://hackage.haskell.org/package/effectful-streamly),
+[effectful-streamly-http](https://hackage.haskell.org/package/effectful-streamly-http),
+[effectful-websockets](https://hackage.haskell.org/package/effectful-websockets),
+[streamly-network-udp](https://hackage.haskell.org/package/streamly-network-udp)
+and those under them) checked out next to this repository, pass
+`--project-file=cabal.project.siblings`.
 
 ## Trying it against a server
 
@@ -56,7 +52,7 @@ its items and prints the level reached, without playing anything.
 `roon-probe image KEY FILE [HOST [PORT]]` writes the image of an image key
 (as found in the traced frames) to a file.
 
-Tested with GHC 9.12.4.
+Tested with GHC 9.8.4, 9.10.3 and 9.12.4, and against Roon Server 2.75.
 
 ## License
 

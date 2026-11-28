@@ -5,8 +5,10 @@ synopsis:        Client library for the Roon extension API
 description:
   An independent, unofficial Haskell implementation of the protocol that
   Roon extensions use to talk to a Roon Server: MOO messages over a
-  WebSocket, extension registration, and (in later versions) the
-  transport and browse services. Built on Effectful and Streamly.
+  WebSocket, discovery of the servers on the network, the registration of
+  an extension, the transport service (zones, queue, playback, volume),
+  the browse service (search, library, play actions) and images. Built on
+  Effectful and Streamly. Not affiliated with Roon Labs.
 
 homepage:        https://github.com/GuillaumedeVolpiano/roon-api
 license:         BSD-3-Clause
@@ -140,7 +142,7 @@ benchmark roon-api-bench
   type:           exitcode-stdio-1.0
   hs-source-dirs: bench
   main-is:        Main.hs
-  ghc-options:    -threaded -O2
+  ghc-options:    -threaded
   build-depends:
     , aeson
     , base
