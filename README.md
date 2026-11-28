@@ -12,8 +12,6 @@ taken from it.
 
 ## Status
 
-Early work in progress. Nothing here is stable yet.
-
 - [x] MOO message encoding and parsing
 - [x] WebSocket transport with keep-alive
 - [x] Extension registration and token persistence
